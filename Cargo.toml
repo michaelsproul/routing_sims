@@ -1,5 +1,5 @@
 [package]
-name = "proofs"
+name = "routing-sims"
 version = "0.1.0"
 authors = ["Diggory Hardy <git@dhardy.name>"]
 
