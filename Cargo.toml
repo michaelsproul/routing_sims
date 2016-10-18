@@ -1,0 +1,9 @@
+[package]
+name = "proofs"
+version = "0.1.0"
+authors = ["Diggory Hardy <git@dhardy.name>"]
+
+[dependencies]
+
+docopt = "*"
+rustc-serialize = "*"
