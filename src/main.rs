@@ -40,16 +40,19 @@ pub fn probQRChosen(n: NN, r: NN, k: NN, q: NN) -> RR {
     // k nodes into a set (so order doesn't matter).
     
     // First, calculate the number of ways of choosing less than q red nodes
-    let mut combs_less: RR = 0 as RR;
-    for x in 0..q {
+    let mut combs_compr: RR = 0 as RR;
+    for x in q...k {
+        if x > r {
+            continue;   // impossible: 0 combinations to add
+        }
         // x is the number of red nodes that get picked; this is the number of
         // possible combinations:
-        combs_less += choose(r, x) * choose(n-r, k-x);
+        combs_compr += choose(r, x) * choose(n-r, k-x);
     }
     
     // Now, the total number of combinations in the set is
     let total_combs = choose(n, k);
-    1.0 - combs_less / total_combs
+    combs_compr / total_combs
 }
 
 
@@ -110,8 +113,8 @@ fn main(){
     println!("Group size on horizontal axis (cols)");
     println!("Qurom size on vertical axis (rows)");
     
-    let W0: usize = 3;
-    let W1: usize = 24;
+    let W0: usize = 3;      // width first column
+    let W1: usize = 24;     // width other columns
     
     // header:
     print!("{1:0$}", W0, "");
