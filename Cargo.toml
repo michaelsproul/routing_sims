@@ -1,9 +1,9 @@
 [package]
+authors = ["Diggory Hardy <git@dhardy.name>"]
 name = "routing-sims"
 version = "0.1.0"
-authors = ["Diggory Hardy <git@dhardy.name>"]
 
 [dependencies]
-
-docopt = "*"
-rustc-serialize = "*"
+docopt = "0.6.86"
+rand = "0.3.14"
+rustc-serialize = "0.3.19"
