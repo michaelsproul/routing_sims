@@ -33,3 +33,48 @@ pub mod sim;
 
 pub type NN = u64;
 pub type RR = f64;
+
+
+pub trait Quorum {
+    /// Get the number of messages needed for quorum. If the quorum algorithm
+    /// does anything more complicated (e.g. check node age) then this should
+    /// return `None`.
+    fn quorum_size(&self) -> Option<NN>;
+    /// Set the quorum size. If `quorum_size()` does not return `None`, then it
+    /// should return the number last set by this method; otherwise the action
+    /// taken by this method is up to the implementation.
+    fn set_quorum_size(&mut self, n: NN);
+}
+
+
+pub trait SimTool {
+    /// Get the total number of nodes
+    fn total_nodes(&self) -> NN;
+    /// Set the total number of nodes
+    fn set_total_nodes(&mut self, n: NN);
+
+    /// Get the number of malicious nodes
+    fn malicious_nodes(&self) -> NN;
+    /// Set the number of malicious nodes
+    fn set_malicious_nodes(&mut self, n: NN);
+
+    /// Get the minimum group size
+    fn min_group_size(&self) -> NN;
+    /// Set the minimum group size
+    fn set_min_group_size(&mut self, n: NN);
+
+    /// Get the quorum algorithm
+    fn quorum(&self) -> &Quorum;
+    /// Adjust the quorum
+    fn quorum_mut(&mut self) -> &mut Quorum;
+
+    /// Set whether the probabilities of compromise returned should be from the
+    /// point of view of a single group (any=false) or any group within the
+    /// entire network (any=true).
+    ///
+    /// On creation this should be set to false.
+    fn set_any(&mut self, any: bool);
+
+    /// Calculate the probability of compromise (range: 0 to 1).
+    fn calc_p_compromise(&self) -> RR;
+}

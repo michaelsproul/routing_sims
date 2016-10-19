@@ -60,18 +60,30 @@ fn main() {
     let args: Args = Docopt::new(USAGE)
         .and_then(|dopt| dopt.decode())
         .unwrap_or_else(|e| e.exit());
-
-    let n = args.flag_n.unwrap_or(1000);
-    let r = if let Some(mut s) = args.flag_r {
+    
+    let mut tool = prob::DirectCalcTool::new();
+    
+    if let Some(n) = args.flag_n {
+        tool.set_total_nodes(n);
+    }
+    
+    if let Some(mut s) = args.flag_r {
         if s.ends_with('%') {
             let _ = s.pop();
-            (n as RR * s.parse::<RR>().expect("In '-r x%', x should be a real number")) as NN
+            let prop = s.parse::<RR>().expect("In '-r x%', x should be a real number");
+            let n = tool.total_nodes() as RR;
+            tool.set_malicious_nodes((n * prop) as NN);
         } else {
-            s.parse::<NN>().expect("In '-r N', N should be a whole number or percentage")
+            s.parse::<NN>().expect("In '-r N', N should be a whole number or percentage");
         }
     } else {
-        (n as RR * 0.1) as NN
+        let n = tool.total_nodes() as RR;
+        tool.set_malicious_nodes((n * 0.1) as NN);
     };
+    
+    tool.set_any(args.flag_a);
+    
+    // Group size and quorum have ranges:
     fn parse_range(s: &str) -> (NN, NN) {
         let ERR: &'static str = "In a range, syntax should be 'x-y' where x and y are whole \
                                  numbers";
@@ -82,17 +94,16 @@ fn main() {
     }
     let k = args.flag_k.map_or((8, 12), |s| parse_range(&s));
     let q = args.flag_q.map_or((5, 12), |s| parse_range(&s));
-    let any = args.flag_a;
 
-    if any {
+    if args.flag_a {
         println!("Expected number of compromised groups, assuming fixed group size, where");
     } else {
         println!("Probability of one specific group being compromised, where");
     }
-    println!("Total nodes n = {}", n);
-    println!("Compromised nodes r = {}", r);
-    println!("Group size on horizontal axis (cols)");
-    println!("Qurom size on vertical axis (rows)");
+    println!("Total nodes n = {}", tool.total_nodes());
+    println!("Compromised nodes r = {}", tool.malicious_nodes());
+    println!("Group size k on horizontal axis (cols)");
+    println!("Qurom size q on vertical axis (rows)");
 
     let W0: usize = 3;      // width first column
     let W1: usize = 24;     // width other columns
@@ -106,14 +117,14 @@ fn main() {
     // rest:
     for qi in q.0...q.1 {
         print!("{1:0$}", W0, qi);
+        tool.quorum_mut().set_quorum_size(qi);
         for ki in k.0...k.1 {
-            let mult = if any { (n as RR) / (ki as RR) } else { 1.0 };
-
             if qi > ki {
                 print!("{1:>0$}", W1, "-");
                 continue;
             }
-            let p = prob::probQRChosen(n, r, ki, qi) * mult;
+            tool.set_min_group_size(ki);
+            let p = tool.calc_p_compromise();
             print!("{1:0$.e}", W1, p);
         }
         println!("");
