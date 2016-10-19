@@ -83,8 +83,11 @@ pub trait SimTool {
 }
 
 fn main() {
+    let args = args::ArgProc::read_args();
     let mut tool = prob::DirectCalcTool::new();
-    let (k, q) = args::apply_args(&mut tool);
+    args.apply(&mut tool);
+    let k = args.group_size_range().unwrap_or((8, 12));
+    let q = args.quorum_size_range().unwrap_or((5, 12));
 
     tool.print_message();
     println!("Total nodes n = {}", tool.total_nodes());

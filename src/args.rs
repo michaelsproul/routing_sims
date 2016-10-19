@@ -25,14 +25,14 @@ const USAGE: &'static str = "
 Probability computation tool.
 
 Usage:
-    routing_sims [-h | --help]
-    routing_sims [-n NUM] [-r VAL] [-k RANGE] [-q RANGE] [-a]
+    routing-sims [-h | --help]
+    routing-sims [-n NUM] [-r VAL] [-k RANGE] [-q RANGE] [-a]
 
 Options:
     -h --help   Show this message
     -n NUM      Number of nodes, total.
     -r VAL      Either number of compromised nodes (e.g. 50) or percentage (default is 10%).
-    -k RANGE    Group size, e.g. 10-20.
+    -k RANGE    Minimum group size, e.g. 10-20.
     -q RANGE    Quorum size, e.g. 5-20.
     -a          Show probabilities of any group being compromised instead of a specific group
 ";
@@ -46,31 +46,49 @@ struct Args {
     flag_a: bool,
 }
 
-// Process args, apply to tool, and return k, q ranges.
-pub fn apply_args(tool: &mut SimTool) -> ((NN, NN), (NN, NN)) {
-    let args: Args = Docopt::new(USAGE)
-        .and_then(|dopt| dopt.decode())
-        .unwrap_or_else(|e| e.exit());
+pub struct ArgProc {
+    args: Args,
+}
+impl ArgProc {
+    pub fn read_args() -> ArgProc {
+        let args: Args = Docopt::new(USAGE)
+            .and_then(|dopt| dopt.decode())
+            .unwrap_or_else(|e| e.exit());
+            
+        ArgProc {
+            args: args,
+        }
+    }
+    
+    pub fn apply(&self, tool: &mut SimTool) {
+        if let Some(n) = self.args.flag_n {
+            tool.set_total_nodes(n);
+        }
 
-    if let Some(n) = args.flag_n {
-        tool.set_total_nodes(n);
+        if let Some(mut s) = self.args.flag_r.clone() {
+            if s.ends_with('%') {
+                let _ = s.pop();
+                let perc = s.parse::<RR>().expect("In '-r x%', x should be a real number");
+                let n = tool.total_nodes() as RR;
+                tool.set_malicious_nodes((n * perc / 100.0) as NN);
+            } else {
+                s.parse::<NN>().expect("In '-r N', N should be a whole number or percentage");
+            }
+        } else {
+            let n = tool.total_nodes() as RR;
+            tool.set_malicious_nodes((n * 0.1) as NN);
+        };
+
+        tool.set_any(self.args.flag_a);
     }
 
-    if let Some(mut s) = args.flag_r {
-        if s.ends_with('%') {
-            let _ = s.pop();
-            let prop = s.parse::<RR>().expect("In '-r x%', x should be a real number");
-            let n = tool.total_nodes() as RR;
-            tool.set_malicious_nodes((n * (prop / 100f64)) as NN);
-        } else {
-            s.parse::<NN>().expect("In '-r N', N should be a whole number or percentage");
-        }
-    } else {
-        let n = tool.total_nodes() as RR;
-        tool.set_malicious_nodes((n * 0.1) as NN);
-    };
+    pub fn group_size_range(&self) -> Option<(NN, NN)> {
+        self.args.flag_k.as_ref().map(|s| Self::parse_range(&s))
+    }
 
-    tool.set_any(args.flag_a);
+    pub fn quorum_size_range(&self) -> Option<(NN, NN)> {
+        self.args.flag_q.as_ref().map(|s| Self::parse_range(&s))
+    }
 
     // Group size and quorum have ranges:
     fn parse_range(s: &str) -> (NN, NN) {
@@ -81,7 +99,4 @@ pub fn apply_args(tool: &mut SimTool) -> ((NN, NN), (NN, NN)) {
         let ub = s[i + 1..s.len()].parse::<NN>().expect(ERR);
         (lb, ub)
     }
-    let k = args.flag_k.map_or((8, 12), |s| parse_range(&s));
-    let q = args.flag_q.map_or((5, 12), |s| parse_range(&s));
-    (k, q)
 }
