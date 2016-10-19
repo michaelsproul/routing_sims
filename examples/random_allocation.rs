@@ -29,7 +29,7 @@ use routing_sims::*;
 
 
 const USAGE: &'static str = "
-Probablity computation tool.
+Probability computation tool.
 
 Sim = random allocation to groups, no targetting
 Output = probability of compromise of a / any group
