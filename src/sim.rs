@@ -16,9 +16,9 @@
 // relating to use of the SAFE Network Software.
 
 //! Simulation tools
-//! 
+//!
 //! These have a number of simplifications over the real network. Notably:
-//! 
+//!
 //! *   Node join/leave and group split/merge are instantaneous.
 //! *   Node names are simply random numbers
 //! *   Node leaving and group merging are not simulated
@@ -26,7 +26,7 @@
 // For now, because lots of stuff isn't implemented yet:
 #![allow(dead_code)]
 
-use super::{NN};
+use super::NN;
 
 use std::cmp::{Ordering, min};
 use std::mem;
@@ -40,7 +40,7 @@ use rand::distributions::{Range, IndependentSample};
 
 
 /// Name type (Xorable in routing library).
-//TODO: which methods do we actually need?
+// TODO: which methods do we actually need?
 trait NameT: Ord {
     /// Returns the length of the common prefix with the `other` name; e. g.
     /// the when `other = 11110000` and `self = 11111111` this is 4.
@@ -104,11 +104,7 @@ impl NameT for NN {
             self
         } else {
             let mask = !0 >> n;
-            if val {
-                self | mask
-            } else {
-                self & !mask
-            }
+            if val { self | mask } else { self & !mask }
         }
     }
 }
@@ -122,7 +118,7 @@ struct Prefix {
     name: NN,
 }
 
-//TODO: which methods do we need?
+// TODO: which methods do we need?
 impl Prefix {
     /// Creates a new `Prefix` with the first `bit_count` bits of `name`.
     /// Insignificant bits are all set to 0.
@@ -255,7 +251,7 @@ struct Network {
 
 impl Network {
     /// Create. Specify minimum group size.
-    /// 
+    ///
     /// An initial, empty, group is created.
     pub fn new(min_group_size: usize) -> Self {
         let mut groups = HashMap::new();
@@ -267,7 +263,10 @@ impl Network {
     }
     /// Insert a node. Returns the prefix of the group added to.
     pub fn add(&mut self, node: Node) -> Result<Prefix> {
-        let prefix = *self.groups.keys().find(|prefix| prefix.matches(node.name)).expect("some prefix must match every name");
+        let prefix = *self.groups
+            .keys()
+            .find(|prefix| prefix.matches(node.name))
+            .expect("some prefix must match every name");
         let mut group = self.groups.get_mut(&prefix).expect("network must include all groups");
         if !group.insert(node) {
             return Err(Error::AlreadyExists);
@@ -278,7 +277,9 @@ impl Network {
     pub fn need_split(&self, prefix: Prefix) -> Result<bool> {
         let group = match self.groups.get(&prefix) {
             Some(g) => g,
-            None => { return Err(Error::NotFound); }
+            None => {
+                return Err(Error::NotFound);
+            }
         };
         let prefix0 = prefix.pushed(false);
         let size_all = group.len();
@@ -289,7 +290,9 @@ impl Network {
     pub fn do_split(&mut self, prefix: Prefix) -> Result<(Prefix, Prefix)> {
         let old_group = match self.groups.remove(&prefix) {
             Some(g) => g,
-            None => { return Err(Error::NotFound); }
+            None => {
+                return Err(Error::NotFound);
+            }
         };
         let prefix0 = prefix.pushed(false);
         let prefix1 = prefix.pushed(true);

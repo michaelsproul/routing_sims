@@ -48,7 +48,7 @@ fn test_choose() {
 pub fn probQRChosen(n: NN, r: NN, k: NN, q: NN) -> RR {
     // In this we consider each node from n/r distinct, and consider recruiting
     // k nodes into a set (so order doesn't matter).
-    
+
     // First, calculate the number of ways of choosing less than q red nodes
     let mut combs_compr: RR = 0 as RR;
     for x in q...k {
@@ -57,9 +57,9 @@ pub fn probQRChosen(n: NN, r: NN, k: NN, q: NN) -> RR {
         }
         // x is the number of red nodes that get picked; this is the number of
         // possible combinations:
-        combs_compr += choose(r, x) * choose(n-r, k-x);
+        combs_compr += choose(r, x) * choose(n - r, k - x);
     }
-    
+
     // Now, the total number of combinations in the set is
     let total_combs = choose(n, k);
     combs_compr / total_combs

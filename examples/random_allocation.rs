@@ -56,11 +56,11 @@ struct Args {
     flag_a: bool,
 }
 
-fn main(){
+fn main() {
     let args: Args = Docopt::new(USAGE)
-            .and_then(|dopt| dopt.decode())
-            .unwrap_or_else(|e| e.exit());
-    
+        .and_then(|dopt| dopt.decode())
+        .unwrap_or_else(|e| e.exit());
+
     let n = args.flag_n.unwrap_or(1000);
     let r = if let Some(mut s) = args.flag_r {
         if s.ends_with('%') {
@@ -73,16 +73,17 @@ fn main(){
         (n as RR * 0.1) as NN
     };
     fn parse_range(s: &str) -> (NN, NN) {
-        let ERR: &'static str = "In a range, syntax should be 'x-y' where x and y are whole numbers";
+        let ERR: &'static str = "In a range, syntax should be 'x-y' where x and y are whole \
+                                 numbers";
         let i = s.find('-').expect(ERR);
         let lb = s[0..i].parse::<NN>().expect(ERR);
-        let ub = s[i+1..s.len()].parse::<NN>().expect(ERR);
+        let ub = s[i + 1..s.len()].parse::<NN>().expect(ERR);
         (lb, ub)
     }
     let k = args.flag_k.map_or((8, 12), |s| parse_range(&s));
     let q = args.flag_q.map_or((5, 12), |s| parse_range(&s));
     let any = args.flag_a;
-    
+
     if any {
         println!("Expected number of compromised groups, assuming fixed group size, where");
     } else {
@@ -92,22 +93,22 @@ fn main(){
     println!("Compromised nodes r = {}", r);
     println!("Group size on horizontal axis (cols)");
     println!("Qurom size on vertical axis (rows)");
-    
+
     let W0: usize = 3;      // width first column
     let W1: usize = 24;     // width other columns
-    
+
     // header:
     print!("{1:0$}", W0, "");
-    for ki in k.0 ... k.1 {
+    for ki in k.0...k.1 {
         print!("{1:0$}", W1, ki);
     }
     println!("");
-    //rest:
-    for qi in q.0 ... q.1 {
+    // rest:
+    for qi in q.0...q.1 {
         print!("{1:0$}", W0, qi);
-        for ki in k.0 ... k.1 {
+        for ki in k.0...k.1 {
             let mult = if any { (n as RR) / (ki as RR) } else { 1.0 };
-            
+
             if qi > ki {
                 print!("{1:>0$}", W1, "-");
                 continue;
