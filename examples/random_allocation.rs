@@ -29,10 +29,10 @@ use routing_sims::*;
 
 
 const USAGE: &'static str = "
-Proofs / probablity computation tool.
+Probablity computation tool.
 
-Sim = random allocation to groups; calculate the probability of compromise given
-that malicious nodes are randomly distributed with no targetting/rejoining.
+Sim = random allocation to groups, no targetting
+Output = probability of compromise of a / any group
 
 Usage:
     proofs [-h | --help]
@@ -55,7 +55,7 @@ struct Args {
     flag_q: Option<String>,
     flag_a: bool,
 }
-    
+
 fn main(){
     let args: Args = Docopt::new(USAGE)
             .and_then(|dopt| dopt.decode())
@@ -112,7 +112,7 @@ fn main(){
                 print!("{1:>0$}", W1, "-");
                 continue;
             }
-            let p = probQRChosen(n, r, ki, qi) * mult;
+            let p = prob::probQRChosen(n, r, ki, qi) * mult;
             print!("{1:0$.e}", W1, p);
         }
         println!("");
