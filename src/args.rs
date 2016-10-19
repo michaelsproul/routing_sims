@@ -25,8 +25,8 @@ const USAGE: &'static str = "
 Probability computation tool.
 
 Usage:
-    proofs [-h | --help]
-    proofs [-n NUM] [-r VAL] [-k RANGE] [-q RANGE] [-a]
+    routing_sims [-h | --help]
+    routing_sims [-n NUM] [-r VAL] [-k RANGE] [-q RANGE] [-a]
 
 Options:
     -h --help   Show this message
@@ -61,7 +61,7 @@ pub fn apply_args(tool: &mut SimTool) -> ((NN, NN), (NN, NN)) {
             let _ = s.pop();
             let prop = s.parse::<RR>().expect("In '-r x%', x should be a real number");
             let n = tool.total_nodes() as RR;
-            tool.set_malicious_nodes((n * prop) as NN);
+            tool.set_malicious_nodes((n * (prop / 100f64)) as NN);
         } else {
             s.parse::<NN>().expect("In '-r N', N should be a whole number or percentage");
         }

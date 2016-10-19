@@ -22,7 +22,7 @@ use super::{NN, RR, Quorum, SimTool};
 use std::cmp::min;
 
 
-/// Calculate `n chose k`, i.e. `n! / (k! (n-k)!)`.
+/// Calculate `n choose k`, i.e. `n! / (k! (n-k)!)`.
 pub fn choose(n: NN, mut k: NN) -> RR {
     assert!(n >= k);
     let mut result: RR = 1 as RR;
