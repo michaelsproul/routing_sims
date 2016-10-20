@@ -18,7 +18,7 @@
 //! Argument processing
 
 use docopt::Docopt;
-use super::{SimTool, NN, RR};
+use super::{Tool, NN, RR};
 
 
 const USAGE: &'static str = "
@@ -26,7 +26,7 @@ Probability computation tool.
 
 Usage:
     routing-sims [-h | --help]
-    routing-sims [-n NUM] [-r VAL] [-k RANGE] [-q RANGE] [-a]
+    routing-sims <tool> [-n NUM] [-r VAL] [-k RANGE] [-q RANGE] [-a]
 
 Options:
     -h --help   Show this message
@@ -39,6 +39,7 @@ Options:
 
 #[derive(RustcDecodable)]
 struct Args {
+    arg_tool: String,
     flag_n: Option<NN>,
     flag_r: Option<String>,
     flag_k: Option<String>,
@@ -54,13 +55,15 @@ impl ArgProc {
         let args: Args = Docopt::new(USAGE)
             .and_then(|dopt| dopt.decode())
             .unwrap_or_else(|e| e.exit());
-            
-        ArgProc {
-            args: args,
-        }
+
+        ArgProc { args: args }
     }
-    
-    pub fn apply(&self, tool: &mut SimTool) {
+
+    pub fn tool(&self) -> &str {
+        &self.args.arg_tool
+    }
+
+    pub fn apply(&self, tool: &mut Tool) {
         if let Some(n) = self.args.flag_n {
             tool.set_total_nodes(n);
         }

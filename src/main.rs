@@ -27,6 +27,8 @@ mod prob;
 pub mod sim;
 mod args;
 
+use std::process::exit;
+
 
 // We could use templating but there's no reason not to do the easy thing and
 // fix types.
@@ -47,7 +49,7 @@ pub trait Quorum {
 }
 
 
-pub trait SimTool {
+pub trait Tool {
     /// Get the total number of nodes
     fn total_nodes(&self) -> NN;
     /// Set the total number of nodes
@@ -84,8 +86,20 @@ pub trait SimTool {
 
 fn main() {
     let args = args::ArgProc::read_args();
-    let mut tool = prob::DirectCalcTool::new();
-    args.apply(&mut tool);
+    let mut tool: Box<Tool> = match args.tool() {
+        "calc" | "DirectCalcTool" => Box::new(prob::DirectCalcTool::new()),
+        "sim" | "SimTool" => Box::new(sim::SimTool::new()),
+        other => {
+            if other.trim().len() == 0 {
+                println!("No tool specified!");
+            } else {
+                println!("Tool not recognised: {}", other);
+            }
+            println!("Tools available: DirectCalcTool (\"calc\"), SimTool (\"sim\")");
+            exit(1);
+        }
+    };
+    args.apply(&mut *tool);
     let k = args.group_size_range().unwrap_or((8, 12));
     let q = args.quorum_size_range().unwrap_or((5, 12));
 
