@@ -26,7 +26,7 @@
 // For now, because lots of stuff isn't implemented yet:
 #![allow(dead_code)]
 
-use super::NN;
+use super::{NN, RR, Quorum, Tool};
 
 use std::cmp::{Ordering, min};
 use std::mem;
@@ -35,12 +35,23 @@ use std::fmt::{self, Formatter, Binary, Debug};
 use std::collections::{HashSet, HashMap};
 use std::result;
 
-use rand::thread_rng;
+use rand::{thread_rng, Rng};
 use rand::distributions::{Range, IndependentSample};
 
 
+// In the future, we may be able to do this:
+// const RANGE_NN: Range<NN> = Range::new(0, NN::max_value());
+#[allow(non_snake_case)]
+fn sample_NN() -> NN {
+    thread_rng().gen()
+}
+fn sample_ub(ub: NN) -> NN {
+    let range = Range::new(0, ub);
+    range.ind_sample(&mut thread_rng())
+}
+
+
 /// Name type (Xorable in routing library).
-// TODO: which methods do we actually need?
 trait NameT: Ord {
     /// Returns the length of the common prefix with the `other` name; e. g.
     /// the when `other = 11110000` and `self = 11111111` this is 4.
@@ -118,7 +129,6 @@ struct Prefix {
     name: NN,
 }
 
-// TODO: which methods do we need?
 impl Prefix {
     /// Creates a new `Prefix` with the first `bit_count` bits of `name`.
     /// Insignificant bits are all set to 0.
@@ -209,11 +219,6 @@ impl Debug for Prefix {
 }
 
 
-fn rand_mod(n: NN) -> NN {
-    Range::new(0, n).ind_sample(&mut thread_rng())
-}
-
-
 /// Error type
 pub enum Error {
     AlreadyExists,
@@ -222,10 +227,21 @@ pub enum Error {
 /// Result type
 pub type Result<T> = result::Result<T, Error>;
 
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            &Error::AlreadyExists => write!(f, "already exists"),
+            &Error::NotFound => write!(f, "not found"),
+        }
+    }
+}
+
 /// Churn type
 pub enum ChurnType {
-    NodeAdd,
-    GroupSplit,
+    AddInitial, // just added; other stuff may still happen
+    AddPreSplit, // group split is about to happen
+    AddPostSplit, // final add notification: after splitting
+    AddNoSplit, // final add notification: no split
 }
 
 /// A node in the network.
@@ -236,9 +252,9 @@ pub struct Node {
 }
 impl Node {
     /// Create a new node with random name and age 0
-    pub fn new() -> Self {
+    pub fn new_random() -> Self {
         Node {
-            name: rand_mod(NN::max_value()),
+            name: sample_NN(),
             age: 0,
         }
     }
@@ -261,8 +277,10 @@ impl Network {
             groups: groups,
         }
     }
+
     /// Insert a node. Returns the prefix of the group added to.
-    pub fn add(&mut self, node: Node) -> Result<Prefix> {
+    pub fn add_node(&mut self) -> Result<Prefix> {
+        let node = Node::new_random();
         let prefix = *self.groups
             .keys()
             .find(|prefix| prefix.matches(node.name))
@@ -273,19 +291,21 @@ impl Network {
         }
         Ok(prefix)
     }
+
     /// Check whether some group needs splitting.
-    pub fn need_split(&self, prefix: Prefix) -> Result<bool> {
+    pub fn need_split(&self, prefix: Prefix) -> bool {
         let group = match self.groups.get(&prefix) {
             Some(g) => g,
             None => {
-                return Err(Error::NotFound);
+                return false;   // ignore "not found" error
             }
         };
         let prefix0 = prefix.pushed(false);
         let size_all = group.len();
         let size0 = group.iter().filter(|node| prefix0.matches(node.name)).count();
-        Ok(size0 >= self.min_new_group_size() && size_all - size0 >= self.min_new_group_size())
+        size0 >= self.min_new_group_size() && size_all - size0 >= self.min_new_group_size()
     }
+
     /// Do a split. Return prefixes of new groups.
     pub fn do_split(&mut self, prefix: Prefix) -> Result<(Prefix, Prefix)> {
         let old_group = match self.groups.remove(&prefix) {
@@ -304,12 +324,126 @@ impl Network {
         assert!(inserted);
         Ok((prefix0, prefix1))
     }
-    /// Actions happening on a churn event on group specified by prefix
-    pub fn churn(&mut self, _type: ChurnType, _prefix: Prefix) -> Result<()> {
-        panic!("churn event has not yet been implemented");
+
+    /// Notification of some type of group churn (see `ChurnType`).
+    pub fn churn(&mut self, _type: ChurnType, _prefix: Prefix) {
+        // some node ageing stuff will happen here...
     }
+
     fn min_new_group_size(&self) -> usize {
         // mirrors RoutingTable
         self.min_group_size + 1
+    }
+}
+
+
+// TODO: different quorum
+pub struct SimTool {
+    num_nodes: NN,
+    num_malicious: NN,
+    min_group_size: NN,
+    quorum: NN,
+    any_group: bool,
+}
+impl SimTool {
+    pub fn new() -> Self {
+        SimTool {
+            num_nodes: 5000,
+            num_malicious: 500,
+            min_group_size: 10,
+            quorum: 8,
+            any_group: false,
+        }
+    }
+}
+impl Quorum for SimTool {
+    fn quorum_size(&self) -> Option<NN> {
+        Some(self.quorum)
+    }
+    
+    fn set_quorum_size(&mut self, n: NN) {
+        self.quorum = n;
+    }
+}
+impl Tool for SimTool {
+    fn total_nodes(&self) -> NN {
+        self.num_nodes
+    }
+    
+    fn set_total_nodes(&mut self, n: NN) {
+        self.num_nodes = n;
+        assert!(self.num_nodes >= self.num_malicious);
+    }
+
+    fn malicious_nodes(&self) -> NN {
+        self.num_malicious
+    }
+    
+    fn set_malicious_nodes(&mut self, n: NN) {
+        self.num_malicious = n;
+        assert!(self.num_nodes >= self.num_malicious);
+    }
+
+    fn min_group_size(&self) -> NN {
+        self.min_group_size
+    }
+    
+    fn set_min_group_size(&mut self, n: NN) {
+        self.min_group_size = n;
+    }
+
+    fn quorum(&self) -> &Quorum {
+        self
+    }
+    
+    fn quorum_mut(&mut self) -> &mut Quorum {
+        self
+    }
+
+    fn set_any(&mut self, any: bool) {
+        self.any_group = any;
+    }
+
+    fn print_message(&self) {
+        if self.any_group {
+            println!("Tool: simulate to find the expected number of compromised groups; \
+                average group size will be larger than min size");
+        } else {
+            println!("Tool: calculate the probability of one specific group (of \
+            min size) being compromised");
+        }
+    }
+
+    fn calc_p_compromise(&self) -> RR {
+        // Create a network
+        let mut net = Network::new(self.min_group_size as usize);
+        let mut remaining = self.num_nodes;
+        while remaining > 0 {
+            match net.add_node() {
+                Ok(prefix) => {
+                    net.churn(ChurnType::AddInitial, prefix);
+                    remaining -= 1;
+                    if net.need_split(prefix) {
+                        net.churn(ChurnType::AddPreSplit, prefix);
+                        match net.do_split(prefix) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                panic!("Error during split: {}", e);
+                            }
+                        };
+                        net.churn(ChurnType::AddPostSplit, prefix);
+                    } else {
+                        net.churn(ChurnType::AddNoSplit, prefix);
+                    }
+                }
+                Err(Error::AlreadyExists) => {
+                    continue;
+                }
+                Err(e) => {
+                    panic!("Error adding node: {}", e);
+                }
+            };
+        }
+        unimplemented!();
     }
 }

@@ -17,7 +17,7 @@
 
 //! Probability tools
 
-use super::{NN, RR, Quorum, SimTool};
+use super::{NN, RR, Quorum, Tool};
 
 use std::cmp::min;
 
@@ -100,7 +100,7 @@ impl Quorum for DirectCalcTool {
         self.quorum = n;
     }
 }
-impl SimTool for DirectCalcTool {
+impl Tool for DirectCalcTool {
     fn total_nodes(&self) -> NN {
         self.num_nodes
     }
