@@ -77,6 +77,9 @@ pub trait Tool {
     /// On creation this should be set to false.
     fn set_any(&mut self, any: bool);
 
+    /// Set verbose flag
+    fn set_verbose(&mut self, verbose: bool);
+
     /// Print a message about the computation (does not include parameters).
     fn print_message(&self);
 
@@ -100,8 +103,8 @@ fn main() {
         }
     };
     args.apply(&mut *tool);
-    let k = args.group_size_range().unwrap_or((8, 12));
-    let q = args.quorum_size_range().unwrap_or((5, 12));
+    let k = args.group_size_range().unwrap_or((8, 10));
+    let q = args.quorum_size_range().unwrap_or((5, 9));
 
     tool.print_message();
     println!("Total nodes n = {}", tool.total_nodes());

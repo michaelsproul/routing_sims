@@ -20,6 +20,7 @@
 use super::{NN, RR, Quorum, Tool};
 
 use std::cmp::min;
+use std::io::{Write, stderr};
 
 
 /// Calculate `n choose k`, i.e. `n! / (k! (n-k)!)`.
@@ -80,6 +81,7 @@ pub struct DirectCalcTool {
     min_group_size: NN,
     quorum: NN,
     any_group: bool,
+    verbose: bool,
 }
 impl DirectCalcTool {
     pub fn new() -> Self {
@@ -89,6 +91,7 @@ impl DirectCalcTool {
             min_group_size: 10,
             quorum: 8,
             any_group: false,
+            verbose: false,
         }
     }
 }
@@ -135,13 +138,17 @@ impl Tool for DirectCalcTool {
         self.any_group = any;
     }
 
+    fn set_verbose(&mut self, v: bool) {
+        self.verbose = v;
+    }
+
     fn print_message(&self) {
+        println!("Tool: calculate probability of compromise assuming all groups are distinct and \
+                  have minimum size");
         if self.any_group {
-            println!("Tool: calculate the expected number of compromised groups, \
-                assuming all groups have min size");
+            println!("Output: expected number of compromised groups");
         } else {
-            println!("Tool: calculate the probability of one specific group (of \
-            min size) being compromised");
+            println!("Output: chance of a randomly selected group being compromised");
         }
     }
 
@@ -150,6 +157,18 @@ impl Tool for DirectCalcTool {
                                 self.num_malicious,
                                 self.min_group_size,
                                 self.quorum);
+
+        if self.verbose {
+            writeln!(stderr(),
+                     "n: {}, r: {}, k: {}, q: {}, P(single group) = {}",
+                     self.num_nodes,
+                     self.num_malicious,
+                     self.min_group_size,
+                     self.quorum,
+                     p)
+                .expect("writing to stderr to work");
+        }
+
         if self.any_group {
             p * ((self.num_nodes as RR) / (self.num_malicious as RR))
         } else {

@@ -26,7 +26,7 @@ Probability computation tool.
 
 Usage:
     routing-sims [-h | --help]
-    routing-sims <tool> [-n NUM] [-r VAL] [-k RANGE] [-q RANGE] [-a]
+    routing-sims <tool> [-n NUM] [-r VAL] [-k RANGE] [-q RANGE] [-a] [-v]
 
 Options:
     -h --help   Show this message
@@ -35,6 +35,7 @@ Options:
     -k RANGE    Minimum group size, e.g. 10-20.
     -q RANGE    Quorum size, e.g. 5-20.
     -a          Show probabilities of any group being compromised instead of a specific group
+    -v          Verbose output to stderr (redirect etiher this or stdout to avoid confusion)
 ";
 
 #[derive(RustcDecodable)]
@@ -45,6 +46,7 @@ struct Args {
     flag_k: Option<String>,
     flag_q: Option<String>,
     flag_a: bool,
+    flag_v: bool,
 }
 
 pub struct ArgProc {
@@ -83,6 +85,7 @@ impl ArgProc {
         };
 
         tool.set_any(self.args.flag_a);
+        tool.set_verbose(self.args.flag_v);
     }
 
     pub fn group_size_range(&self) -> Option<(NN, NN)> {

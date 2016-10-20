@@ -26,7 +26,7 @@
 // For now, because lots of stuff isn't implemented yet:
 #![allow(dead_code)]
 
-use super::{NN, RR, Quorum, Tool};
+use super::{NN, RR, Quorum, Tool, prob};
 
 use std::cmp::{Ordering, min};
 use std::mem;
@@ -34,6 +34,7 @@ use std::hash::{Hash, Hasher};
 use std::fmt::{self, Formatter, Binary, Debug};
 use std::collections::{HashSet, HashMap};
 use std::result;
+use std::io::{Write, stderr};
 
 use rand::{thread_rng, Rng};
 use rand::distributions::{Range, IndependentSample};
@@ -344,6 +345,7 @@ pub struct SimTool {
     min_group_size: NN,
     quorum: NN,
     any_group: bool,
+    verbose: bool,
 }
 impl SimTool {
     pub fn new() -> Self {
@@ -353,6 +355,7 @@ impl SimTool {
             min_group_size: 10,
             quorum: 8,
             any_group: false,
+            verbose: false,
         }
     }
 }
@@ -360,7 +363,7 @@ impl Quorum for SimTool {
     fn quorum_size(&self) -> Option<NN> {
         Some(self.quorum)
     }
-    
+
     fn set_quorum_size(&mut self, n: NN) {
         self.quorum = n;
     }
@@ -369,7 +372,7 @@ impl Tool for SimTool {
     fn total_nodes(&self) -> NN {
         self.num_nodes
     }
-    
+
     fn set_total_nodes(&mut self, n: NN) {
         self.num_nodes = n;
         assert!(self.num_nodes >= self.num_malicious);
@@ -378,7 +381,7 @@ impl Tool for SimTool {
     fn malicious_nodes(&self) -> NN {
         self.num_malicious
     }
-    
+
     fn set_malicious_nodes(&mut self, n: NN) {
         self.num_malicious = n;
         assert!(self.num_nodes >= self.num_malicious);
@@ -387,7 +390,7 @@ impl Tool for SimTool {
     fn min_group_size(&self) -> NN {
         self.min_group_size
     }
-    
+
     fn set_min_group_size(&mut self, n: NN) {
         self.min_group_size = n;
     }
@@ -395,7 +398,7 @@ impl Tool for SimTool {
     fn quorum(&self) -> &Quorum {
         self
     }
-    
+
     fn quorum_mut(&mut self) -> &mut Quorum {
         self
     }
@@ -404,13 +407,17 @@ impl Tool for SimTool {
         self.any_group = any;
     }
 
+    fn set_verbose(&mut self, v: bool) {
+        self.verbose = v;
+    }
+
     fn print_message(&self) {
+        println!("Tool: simulate allocation of nodes to groups; each has size at least the \
+                  specified minimum size");
         if self.any_group {
-            println!("Tool: simulate to find the expected number of compromised groups; \
-                average group size will be larger than min size");
+            println!("Output: expected number of compromised groups");
         } else {
-            println!("Tool: calculate the probability of one specific group (of \
-            min size) being compromised");
+            println!("Output: chance of a randomly selected group being compromised");
         }
     }
 
@@ -444,6 +451,33 @@ impl Tool for SimTool {
                 }
             };
         }
-        unimplemented!();
+
+        if self.any_group {
+            unimplemented!();
+        } else {
+            // Calculate probability of compromise of one selected group.
+
+            // Take the group appearing first in self.groups. Since hash-maps
+            // are randomly ordered in Rust, there should be nothing special
+            // about this group.
+            let (_, group) = net.groups.iter().next().expect("there should be at least one group");
+            let size = group.len() as NN;
+
+            // We already have code to do the rest:
+            let p = prob::prob_compromise(self.num_nodes, self.num_malicious, size, self.quorum);
+
+            if self.verbose {
+                writeln!(stderr(),
+                         "n: {}, r: {}, k: {}, q: {}, P(single group) = {}",
+                         self.num_nodes,
+                         self.num_malicious,
+                         size,
+                         self.quorum,
+                         p)
+                    .expect("writing to stderr to work");
+            }
+
+            p
+        }
     }
 }
