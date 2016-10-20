@@ -35,7 +35,7 @@ use std::fmt::{self, Formatter, Binary, Debug};
 use std::collections::{HashSet, HashMap};
 use std::result;
 
-use rand::thread_rng;
+use rand::{thread_rng, Rng};
 use rand::distributions::{Range, IndependentSample};
 
 
@@ -43,8 +43,7 @@ use rand::distributions::{Range, IndependentSample};
 // const RANGE_NN: Range<NN> = Range::new(0, NN::max_value());
 #[allow(non_snake_case)]
 fn sample_NN() -> NN {
-    let range = Range::new(0, NN::max_value());
-    range.ind_sample(&mut thread_rng())
+    thread_rng().gen()
 }
 fn sample_ub(ub: NN) -> NN {
     let range = Range::new(0, ub);
