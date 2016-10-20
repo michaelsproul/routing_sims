@@ -26,8 +26,10 @@ extern crate docopt;
 mod prob;
 pub mod sim;
 mod args;
+mod quorum;
 
 use std::process::exit;
+use quorum::Quorum;
 
 
 // We could use templating but there's no reason not to do the easy thing and
@@ -35,18 +37,6 @@ use std::process::exit;
 
 pub type NN = u64;
 pub type RR = f64;
-
-
-pub trait Quorum {
-    /// Get the number of messages needed for quorum. If the quorum algorithm
-    /// does anything more complicated (e.g. check node age) then this should
-    /// return `None`.
-    fn quorum_size(&self) -> Option<NN>;
-    /// Set the quorum size. If `quorum_size()` does not return `None`, then it
-    /// should return the number last set by this method; otherwise the action
-    /// taken by this method is up to the implementation.
-    fn set_quorum_size(&mut self, n: NN);
-}
 
 
 pub trait Tool {
@@ -103,37 +93,35 @@ fn main() {
         }
     };
     args.apply(&mut *tool);
-    let k = args.group_size_range().unwrap_or((8, 10));
-    let q = args.quorum_size_range().unwrap_or((5, 9));
+    let k_range = args.group_size_range().unwrap_or((8, 10));
+    let q_range = args.quorum_size_range().unwrap_or(((0.5, 0.9), 0.2));
 
     tool.print_message();
     println!("Total nodes n = {}", tool.total_nodes());
     println!("Compromised nodes r = {}", tool.malicious_nodes());
     println!("Min group size k on horizontal axis (cols)");
-    println!("Qurom size q on vertical axis (rows)");
+    println!("Qurom size (proportion) q on vertical axis (rows)");
 
     const W0: usize = 3;      // width first column
     const W1: usize = 24;     // width other columns
 
     // header:
-    print!("{1:0$}", W0, "");
-    for ki in k.0...k.1 {
+    print!("{1:0$}", W0 + 2, "");
+    for ki in k_range.0...k_range.1 {
         print!("{1:0$}", W1, ki);
     }
     println!("");
     // rest:
-    for qi in q.0...q.1 {
-        print!("{1:0$}", W0, qi);
-        tool.quorum_mut().set_quorum_size(qi);
-        for ki in k.0...k.1 {
-            if qi > ki {
-                print!("{1:>0$}", W1, "-");
-                continue;
-            }
+    let mut q = (q_range.0).0;
+    while q <= (q_range.0).1 {
+        print!("{1:.0$}", W0, q);
+        tool.quorum_mut().set_quorum_proportion(q);
+        for ki in k_range.0...k_range.1 {
             tool.set_min_group_size(ki);
             let p = tool.calc_p_compromise();
             print!("{1:0$.e}", W1, p);
         }
         println!("");
+        q += q_range.1;
     }
 }
