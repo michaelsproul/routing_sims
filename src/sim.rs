@@ -409,8 +409,7 @@ impl Tool for SimTool {
         println!("Tool: simulate allocation of nodes to groups; each has size at least the \
                   specified minimum size");
         if self.any_group {
-            println!("Output: the probability that any group is compromised (complement of \
-                      probability that no group is compromised)");
+            println!("Output: the probability that at least one group is compromised");
         } else {
             println!("Output: chance of a randomly selected group being compromised");
         }
@@ -447,19 +446,16 @@ impl Tool for SimTool {
             };
         }
 
-        let n = self.num_nodes;
-        let r = self.num_malicious;
-
         if self.any_group {
             // This isn't quite right, since one group not compromised does
             // tell you _something_ about the distribution of malicious nodes,
-            // thus probablities are not indepedent. But unless there are a lot
+            // thus probabilities are not indepedent. But unless there are a lot
             // of malicious nodes it should be close.
             let mut p_no_compromise = 1.0;
             for (_, group) in &net.groups {
                 let k = group.len() as NN;
                 let q = self.quorum.quorum_size(k).expect("simple quorum size");
-                let p = prob::prob_compromise(n, r, k, q);
+                let p = prob::prob_compromise(self.num_nodes, self.num_malicious, k, q);
                 p_no_compromise *= 1.0 - p;
             }
             1.0 - p_no_compromise
@@ -474,13 +470,13 @@ impl Tool for SimTool {
             let q = self.quorum.quorum_size(k).expect("simple quorum size");
 
             // We already have code to do the rest:
-            let p = prob::prob_compromise(n, r, k, q);
+            let p = prob::prob_compromise(self.num_nodes, self.num_malicious, k, q);
 
             if self.verbose {
                 writeln!(stderr(),
                          "n: {}, r: {}, k: {}, q: {}, P(single group) = {:.e}",
-                         n,
-                         r,
+                         self.num_nodes,
+                         self.num_malicious,
                          k,
                          q,
                          p)

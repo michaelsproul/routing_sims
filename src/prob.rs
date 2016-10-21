@@ -146,8 +146,7 @@ impl Tool for DirectCalcTool {
         println!("Tool: calculate probability of compromise, assuming all groups have minimum \
                   size");
         if self.any_group {
-            println!("Output: the probability that any group is compromised (complement of \
-                      probability that no group is compromised)");
+            println!("Output: the probability that at least one group is compromised");
         } else {
             println!("Output: chance of a randomly selected group being compromised");
         }
