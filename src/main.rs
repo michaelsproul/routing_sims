@@ -30,6 +30,7 @@ mod quorum;
 
 use std::process::exit;
 use quorum::Quorum;
+use args::QuorumRange;
 
 
 // We could use templating but there's no reason not to do the easy thing and
@@ -93,8 +94,16 @@ fn main() {
         }
     };
     args.apply(&mut *tool);
-    let k_range = args.group_size_range().unwrap_or((8, 10));
-    let q_range = args.quorum_size_range().unwrap_or(((0.5, 0.9), 0.2));
+    let group_size_range = args.group_size_range().unwrap_or((8, 10));
+    let quorum_range = match args.quorum_size_range() {
+        Some(r) => r,
+        None => {
+            QuorumRange {
+                range: (0.5, 0.9),
+                step: 0.2,
+            }
+        }
+    };
 
     tool.print_message();
     println!("Total nodes n = {}", tool.total_nodes());
@@ -107,21 +116,21 @@ fn main() {
 
     // header:
     print!("{1:0$}", W0 + 2, "");
-    for ki in k_range.0...k_range.1 {
-        print!("{1:0$}", W1, ki);
+    for group_size in group_size_range.0...group_size_range.1 {
+        print!("{1:0$}", W1, group_size);
     }
     println!("");
     // rest:
-    let mut q = (q_range.0).0;
-    while q <= (q_range.0).1 {
-        print!("{1:.0$}", W0, q);
-        tool.quorum_mut().set_quorum_proportion(q);
-        for ki in k_range.0...k_range.1 {
-            tool.set_min_group_size(ki);
+    let mut quorum_size = quorum_range.range.0;
+    while quorum_size <= quorum_range.range.1 {
+        print!("{1:.0$}", W0, quorum_size);
+        tool.quorum_mut().set_quorum_proportion(quorum_size);
+        for group_size in group_size_range.0...group_size_range.1 {
+            tool.set_min_group_size(group_size);
             let p = tool.calc_p_compromise();
             print!("{1:0$.e}", W1, p);
         }
         println!("");
-        q += q_range.1;
+        quorum_size += quorum_range.step;
     }
 }

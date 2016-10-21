@@ -38,7 +38,7 @@ Options:
     -k RANGE    Minimum group size, e.g. 10-20.
     -q RANGE    Quorum size as a percentage with step size, e.g. 50-90:10.
     -a          Show probabilities of any group being compromised instead of a specific group
-    -v          Verbose output to stderr (redirect etiher this or stdout to avoid confusion)
+    -v          Verbose output to stderr (redirect either this or stdout to avoid confusion)
 ";
 
 #[derive(RustcDecodable)]
@@ -50,6 +50,11 @@ struct Args {
     flag_q: Option<String>,
     flag_a: bool,
     flag_v: bool,
+}
+
+pub struct QuorumRange {
+    pub range: (RR, RR),
+    pub step: RR,
 }
 
 pub struct ArgProc {
@@ -95,7 +100,7 @@ impl ArgProc {
         self.args.flag_k.as_ref().map(|s| Self::parse_range(&s))
     }
 
-    pub fn quorum_size_range(&self) -> Option<((RR, RR), RR)> {
+    pub fn quorum_size_range(&self) -> Option<QuorumRange> {
         let s: &str = match self.args.flag_q {
             Some(ref s) => s.as_ref(),
             None => {
@@ -103,11 +108,13 @@ impl ArgProc {
             }
         };
         let i = s.find(':').expect("Syntax should be a-b:step");
-        let step =
-            s[i + 1..s.len()].parse::<RR>().expect("step in a-b:step should be a valid number");
-        let (a, b): (RR, RR) = Self::parse_range(&s[0..i]);
+        let step = s[i + 1..].parse::<RR>().expect("step in a-b:step should be a valid number");
+        let (a, b): (RR, RR) = Self::parse_range(&s[..i]);
         // Convert from percentages:
-        Some(((a * 0.01, b * 0.01), step * 0.01))
+        Some(QuorumRange {
+            range: (a * 0.01, b * 0.01),
+            step: step * 0.01,
+        })
     }
 
     // Group size and quorum have ranges:
@@ -116,8 +123,8 @@ impl ArgProc {
     {
         const ERR: &'static str = "In a range, syntax should be 'x-y'";
         let i = s.find('-').expect(ERR);
-        let lb = s[0..i].parse::<T>().expect(ERR);
-        let ub = s[i + 1..s.len()].parse::<T>().expect(ERR);
+        let lb = s[..i].parse::<T>().expect(ERR);
+        let ub = s[i + 1..].parse::<T>().expect(ERR);
         (lb, ub)
     }
 }
