@@ -170,7 +170,7 @@ impl Tool for DirectCalcTool {
         }
 
         if self.any_group {
-            let n_groups = (self.num_nodes as RR) / (self.num_malicious as RR);
+            let n_groups = (self.num_nodes as RR) / (self.min_group_size as RR);
             1.0 - (1.0 - p).powf(n_groups)
         } else {
             p
