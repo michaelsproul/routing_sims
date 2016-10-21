@@ -26,7 +26,8 @@
 // For now, because lots of stuff isn't implemented yet:
 #![allow(dead_code)]
 
-use super::{NN, RR, Quorum, Tool};
+use super::{NN, RR, Tool, prob};
+use super::quorum::{Quorum, SimpleQuorum};
 
 use std::cmp::{Ordering, min};
 use std::mem;
@@ -34,6 +35,7 @@ use std::hash::{Hash, Hasher};
 use std::fmt::{self, Formatter, Binary, Debug};
 use std::collections::{HashSet, HashMap};
 use std::result;
+use std::io::{Write, stderr};
 
 use rand::{thread_rng, Rng};
 use rand::distributions::{Range, IndependentSample};
@@ -342,34 +344,29 @@ pub struct SimTool {
     num_nodes: NN,
     num_malicious: NN,
     min_group_size: NN,
-    quorum: NN,
+    quorum: SimpleQuorum,
     any_group: bool,
+    verbose: bool,
 }
+
 impl SimTool {
     pub fn new() -> Self {
         SimTool {
             num_nodes: 5000,
             num_malicious: 500,
             min_group_size: 10,
-            quorum: 8,
+            quorum: SimpleQuorum::new(),
             any_group: false,
+            verbose: false,
         }
     }
 }
-impl Quorum for SimTool {
-    fn quorum_size(&self) -> Option<NN> {
-        Some(self.quorum)
-    }
-    
-    fn set_quorum_size(&mut self, n: NN) {
-        self.quorum = n;
-    }
-}
+
 impl Tool for SimTool {
     fn total_nodes(&self) -> NN {
         self.num_nodes
     }
-    
+
     fn set_total_nodes(&mut self, n: NN) {
         self.num_nodes = n;
         assert!(self.num_nodes >= self.num_malicious);
@@ -378,7 +375,7 @@ impl Tool for SimTool {
     fn malicious_nodes(&self) -> NN {
         self.num_malicious
     }
-    
+
     fn set_malicious_nodes(&mut self, n: NN) {
         self.num_malicious = n;
         assert!(self.num_nodes >= self.num_malicious);
@@ -387,30 +384,35 @@ impl Tool for SimTool {
     fn min_group_size(&self) -> NN {
         self.min_group_size
     }
-    
+
     fn set_min_group_size(&mut self, n: NN) {
         self.min_group_size = n;
     }
 
     fn quorum(&self) -> &Quorum {
-        self
+        &self.quorum
     }
-    
+
     fn quorum_mut(&mut self) -> &mut Quorum {
-        self
+        &mut self.quorum
     }
 
     fn set_any(&mut self, any: bool) {
         self.any_group = any;
     }
 
+    fn set_verbose(&mut self, v: bool) {
+        self.verbose = v;
+    }
+
     fn print_message(&self) {
+        println!("Tool: simulate allocation of nodes to groups; each has size at least the \
+                  specified minimum size");
         if self.any_group {
-            println!("Tool: simulate to find the expected number of compromised groups; \
-                average group size will be larger than min size");
+            println!("Output: expected number of compromised groups");
         } else {
-            println!("Tool: calculate the probability of one specific group (of \
-            min size) being compromised");
+
+            println!("Output: chance of a randomly selected group being compromised");
         }
     }
 
@@ -444,6 +446,34 @@ impl Tool for SimTool {
                 }
             };
         }
-        unimplemented!();
+
+        if self.any_group {
+            unimplemented!();
+        } else {
+            // Calculate probability of compromise of one selected group.
+
+            // Take the group appearing first in self.groups. Since hash-maps
+            // are randomly ordered in Rust, there should be nothing special
+            // about this group.
+            let (_, group) = net.groups.iter().next().expect("there should be at least one group");
+            let k = group.len() as NN;
+            let q = self.quorum.quorum_size(k).expect("simple quorum size");
+
+            // We already have code to do the rest:
+            let p = prob::prob_compromise(self.num_nodes, self.num_malicious, k, q);
+
+            if self.verbose {
+                writeln!(stderr(),
+                         "n: {}, r: {}, k: {}, q: {}, P(single group) = {:.e}",
+                         self.num_nodes,
+                         self.num_malicious,
+                         k,
+                         q,
+                         p)
+                    .expect("writing to stderr to work");
+            }
+
+            p
+        }
     }
 }

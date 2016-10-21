@@ -17,9 +17,11 @@
 
 //! Probability tools
 
-use super::{NN, RR, Quorum, Tool};
+use super::{NN, RR, Tool};
+use super::quorum::{Quorum, SimpleQuorum};
 
 use std::cmp::min;
+use std::io::{Write, stderr};
 
 
 /// Calculate `n choose k`, i.e. `n! / (k! (n-k)!)`.
@@ -47,9 +49,10 @@ fn test_choose() {
 /// Calculate the probability of choosing at least `q` "red" nodes, where there
 /// are `n` total nodes, `r` red, and we choose `k`.
 pub fn prob_compromise(n: NN, r: NN, k: NN, q: NN) -> RR {
-    assert!(n >= r);
+    assert!(n >= r, "expected n >= r; found n={}, r={}", n, r);
+    assert!(k >= q, "expected k >= q; found k={}, q={}", k, q);
     assert!(n - r >= k - q,
-            "expected n-r >= k-q; found {} < {}",
+            "expected n-r >= k-q; found n-r = {}, k-q = {}",
             n - r,
             k - q);
 
@@ -78,32 +81,29 @@ pub struct DirectCalcTool {
     num_nodes: NN,
     num_malicious: NN,
     min_group_size: NN,
-    quorum: NN,
+    quorum: SimpleQuorum,
     any_group: bool,
+    verbose: bool,
 }
+
 impl DirectCalcTool {
     pub fn new() -> Self {
         DirectCalcTool {
             num_nodes: 5000,
             num_malicious: 500,
             min_group_size: 10,
-            quorum: 8,
+            quorum: SimpleQuorum::new(),
             any_group: false,
+            verbose: false,
         }
     }
 }
-impl Quorum for DirectCalcTool {
-    fn quorum_size(&self) -> Option<NN> {
-        Some(self.quorum)
-    }
-    fn set_quorum_size(&mut self, n: NN) {
-        self.quorum = n;
-    }
-}
+
 impl Tool for DirectCalcTool {
     fn total_nodes(&self) -> NN {
         self.num_nodes
     }
+
     fn set_total_nodes(&mut self, n: NN) {
         self.num_nodes = n;
         assert!(self.num_nodes >= self.num_malicious);
@@ -112,6 +112,7 @@ impl Tool for DirectCalcTool {
     fn malicious_nodes(&self) -> NN {
         self.num_malicious
     }
+
     fn set_malicious_nodes(&mut self, n: NN) {
         self.num_malicious = n;
         assert!(self.num_nodes >= self.num_malicious);
@@ -120,36 +121,53 @@ impl Tool for DirectCalcTool {
     fn min_group_size(&self) -> NN {
         self.min_group_size
     }
+
     fn set_min_group_size(&mut self, n: NN) {
         self.min_group_size = n;
     }
 
     fn quorum(&self) -> &Quorum {
-        self
+        &self.quorum
     }
+
     fn quorum_mut(&mut self) -> &mut Quorum {
-        self
+        &mut self.quorum
     }
 
     fn set_any(&mut self, any: bool) {
         self.any_group = any;
     }
 
+    fn set_verbose(&mut self, v: bool) {
+        self.verbose = v;
+    }
+
     fn print_message(&self) {
+        println!("Tool: calculate probability of compromise assuming all groups are distinct and \
+                  have minimum size");
         if self.any_group {
-            println!("Tool: calculate the expected number of compromised groups, \
-                assuming all groups have min size");
+            println!("Output: expected number of compromised groups");
         } else {
-            println!("Tool: calculate the probability of one specific group (of \
-            min size) being compromised");
+            println!("Output: chance of a randomly selected group being compromised");
         }
     }
 
     fn calc_p_compromise(&self) -> RR {
-        let p = prob_compromise(self.num_nodes,
-                                self.num_malicious,
-                                self.min_group_size,
-                                self.quorum);
+        let k = self.min_group_size;
+        let q = self.quorum.quorum_size(k).expect("simple quorum size");
+        let p = prob_compromise(self.num_nodes, self.num_malicious, k, q);
+
+        if self.verbose {
+            writeln!(stderr(),
+                     "n: {}, r: {}, k: {}, q: {}, P(single group) = {:.e}",
+                     self.num_nodes,
+                     self.num_malicious,
+                     k,
+                     q,
+                     p)
+                .expect("writing to stderr to work");
+        }
+
         if self.any_group {
             p * ((self.num_nodes as RR) / (self.num_malicious as RR))
         } else {

@@ -26,8 +26,11 @@ extern crate docopt;
 mod prob;
 pub mod sim;
 mod args;
+mod quorum;
 
 use std::process::exit;
+use quorum::Quorum;
+use args::QuorumRange;
 
 
 // We could use templating but there's no reason not to do the easy thing and
@@ -35,18 +38,6 @@ use std::process::exit;
 
 pub type NN = u64;
 pub type RR = f64;
-
-
-pub trait Quorum {
-    /// Get the number of messages needed for quorum. If the quorum algorithm
-    /// does anything more complicated (e.g. check node age) then this should
-    /// return `None`.
-    fn quorum_size(&self) -> Option<NN>;
-    /// Set the quorum size. If `quorum_size()` does not return `None`, then it
-    /// should return the number last set by this method; otherwise the action
-    /// taken by this method is up to the implementation.
-    fn set_quorum_size(&mut self, n: NN);
-}
 
 
 pub trait Tool {
@@ -77,6 +68,9 @@ pub trait Tool {
     /// On creation this should be set to false.
     fn set_any(&mut self, any: bool);
 
+    /// Set verbose flag
+    fn set_verbose(&mut self, verbose: bool);
+
     /// Print a message about the computation (does not include parameters).
     fn print_message(&self);
 
@@ -100,37 +94,43 @@ fn main() {
         }
     };
     args.apply(&mut *tool);
-    let k = args.group_size_range().unwrap_or((8, 12));
-    let q = args.quorum_size_range().unwrap_or((5, 12));
+    let group_size_range = args.group_size_range().unwrap_or((8, 10));
+    let quorum_range = match args.quorum_size_range() {
+        Some(r) => r,
+        None => {
+            QuorumRange {
+                range: (0.5, 0.9),
+                step: 0.2,
+            }
+        }
+    };
 
     tool.print_message();
     println!("Total nodes n = {}", tool.total_nodes());
     println!("Compromised nodes r = {}", tool.malicious_nodes());
     println!("Min group size k on horizontal axis (cols)");
-    println!("Qurom size q on vertical axis (rows)");
+    println!("Qurom size (proportion) q on vertical axis (rows)");
 
     const W0: usize = 3;      // width first column
     const W1: usize = 24;     // width other columns
 
     // header:
-    print!("{1:0$}", W0, "");
-    for ki in k.0...k.1 {
-        print!("{1:0$}", W1, ki);
+    print!("{1:0$}", W0 + 2, "");
+    for group_size in group_size_range.0...group_size_range.1 {
+        print!("{1:0$}", W1, group_size);
     }
     println!("");
     // rest:
-    for qi in q.0...q.1 {
-        print!("{1:0$}", W0, qi);
-        tool.quorum_mut().set_quorum_size(qi);
-        for ki in k.0...k.1 {
-            if qi > ki {
-                print!("{1:>0$}", W1, "-");
-                continue;
-            }
-            tool.set_min_group_size(ki);
+    let mut quorum_size = quorum_range.range.0;
+    while quorum_size <= quorum_range.range.1 {
+        print!("{1:.0$}", W0, quorum_size);
+        tool.quorum_mut().set_quorum_proportion(quorum_size);
+        for group_size in group_size_range.0...group_size_range.1 {
+            tool.set_min_group_size(group_size);
             let p = tool.calc_p_compromise();
             print!("{1:0$.e}", W1, p);
         }
         println!("");
+        quorum_size += quorum_range.step;
     }
 }
