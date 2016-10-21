@@ -447,8 +447,22 @@ impl Tool for SimTool {
             };
         }
 
+        let n = self.num_nodes;
+        let r = self.num_malicious;
+
         if self.any_group {
-            unimplemented!();
+            // This isn't quite right, since one group not compromised does
+            // tell you _something_ about the distribution of malicious nodes,
+            // thus probablities are not indepedent. But unless there are a lot
+            // of malicious nodes it should be close.
+            let mut p_no_compromise = 1.0;
+            for (_, group) in &net.groups {
+                let k = group.len() as NN;
+                let q = self.quorum.quorum_size(k).expect("simple quorum size");
+                let p = prob::prob_compromise(n, r, k, q);
+                p_no_compromise *= 1.0 - p;
+            }
+            1.0 - p_no_compromise
         } else {
             // Calculate probability of compromise of one selected group.
 
@@ -460,13 +474,13 @@ impl Tool for SimTool {
             let q = self.quorum.quorum_size(k).expect("simple quorum size");
 
             // We already have code to do the rest:
-            let p = prob::prob_compromise(self.num_nodes, self.num_malicious, k, q);
+            let p = prob::prob_compromise(n, r, k, q);
 
             if self.verbose {
                 writeln!(stderr(),
                          "n: {}, r: {}, k: {}, q: {}, P(single group) = {:.e}",
-                         self.num_nodes,
-                         self.num_malicious,
+                         n,
+                         r,
                          k,
                          q,
                          p)
