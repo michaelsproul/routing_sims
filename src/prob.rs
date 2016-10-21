@@ -143,10 +143,11 @@ impl Tool for DirectCalcTool {
     }
 
     fn print_message(&self) {
-        println!("Tool: calculate probability of compromise assuming all groups are distinct and \
-                  have minimum size");
+        println!("Tool: calculate probability of compromise, assuming all groups have minimum \
+                  size");
         if self.any_group {
-            println!("Output: expected number of compromised groups");
+            println!("Output: the probability that any group is compromised (complement of \
+                      probability that no group is compromised)");
         } else {
             println!("Output: chance of a randomly selected group being compromised");
         }
@@ -169,7 +170,8 @@ impl Tool for DirectCalcTool {
         }
 
         if self.any_group {
-            p * ((self.num_nodes as RR) / (self.num_malicious as RR))
+            let n_groups = (self.num_nodes as RR) / (self.num_malicious as RR);
+            1.0 - (1.0 - p).powf(n_groups)
         } else {
             p
         }

@@ -409,9 +409,9 @@ impl Tool for SimTool {
         println!("Tool: simulate allocation of nodes to groups; each has size at least the \
                   specified minimum size");
         if self.any_group {
-            println!("Output: expected number of compromised groups");
+            println!("Output: the probability that any group is compromised (complement of \
+                      probability that no group is compromised)");
         } else {
-
             println!("Output: chance of a randomly selected group being compromised");
         }
     }

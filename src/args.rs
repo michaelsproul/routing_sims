@@ -37,7 +37,7 @@ Options:
     -r VAL      Either number of compromised nodes (e.g. 50) or percentage (default is 10%).
     -k RANGE    Minimum group size, e.g. 10-20.
     -q RANGE    Quorum size as a percentage with step size, e.g. 50-90:10.
-    -a          Show probabilities of any group being compromised instead of a specific group
+    -a          Show probabilities of any group being compromised instead of a selected group
     -v          Verbose output to stderr (redirect either this or stdout to avoid confusion)
 ";
 
