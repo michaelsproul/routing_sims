@@ -24,12 +24,16 @@ extern crate rustc_serialize;
 extern crate docopt;
 
 mod prob;
-pub mod sim;
+mod sim;
 mod args;
 mod quorum;
+mod tools;
 
 use std::process::exit;
-use quorum::Quorum;
+use std::result;
+use std::fmt::{self, Formatter};
+
+use tools::{Tool, DirectCalcTool, SimStructureTool};
 use args::QuorumRange;
 
 
@@ -39,50 +43,91 @@ use args::QuorumRange;
 pub type NN = u64;
 pub type RR = f64;
 
-
-pub trait Tool {
-    /// Get the total number of nodes
-    fn total_nodes(&self) -> NN;
-    /// Set the total number of nodes
-    fn set_total_nodes(&mut self, n: NN);
-
-    /// Get the number of malicious nodes
-    fn malicious_nodes(&self) -> NN;
-    /// Set the number of malicious nodes
-    fn set_malicious_nodes(&mut self, n: NN);
-
-    /// Get the minimum group size
-    fn min_group_size(&self) -> NN;
-    /// Set the minimum group size
-    fn set_min_group_size(&mut self, n: NN);
-
-    /// Get the quorum algorithm
-    fn quorum(&self) -> &Quorum;
-    /// Adjust the quorum
-    fn quorum_mut(&mut self) -> &mut Quorum;
-
-    /// Set whether the probabilities of compromise returned should be from the
-    /// point of view of a single group (any=false) or any group within the
-    /// entire network (any=true).
-    ///
-    /// On creation this should be set to false.
-    fn set_any(&mut self, any: bool);
-
-    /// Set verbose flag
-    fn set_verbose(&mut self, verbose: bool);
-
-    /// Print a message about the computation (does not include parameters).
-    fn print_message(&self);
-
-    /// Calculate the probability of compromise (range: 0 to 1).
-    fn calc_p_compromise(&self) -> RR;
+/// Error type
+pub enum Error {
+    AlreadyExists,
+    NotFound,
 }
+/// Result type
+pub type Result<T> = result::Result<T, Error>;
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            &Error::AlreadyExists => write!(f, "already exists"),
+            &Error::NotFound => write!(f, "not found"),
+        }
+    }
+}
+
+pub struct ToolArgs {
+    num_nodes: NN,
+    num_malicious: NN,
+    min_group_size: NN,
+    any_group: bool,
+    verbose: bool,
+}
+impl ToolArgs {
+    fn new() -> Self {
+        ToolArgs {
+            num_nodes: 5000,
+            num_malicious: 500,
+            min_group_size: 10,
+            any_group: false,
+            verbose: false,
+        }
+    }
+
+    fn total_nodes(&self) -> NN {
+        self.num_nodes
+    }
+
+    fn set_total_nodes(&mut self, n: NN) {
+        self.num_nodes = n;
+        assert!(self.num_nodes >= self.num_malicious);
+    }
+
+    fn malicious_nodes(&self) -> NN {
+        self.num_malicious
+    }
+
+    fn set_malicious_nodes(&mut self, n: NN) {
+        self.num_malicious = n;
+        assert!(self.num_nodes >= self.num_malicious);
+    }
+
+    fn min_group_size(&self) -> NN {
+        self.min_group_size
+    }
+
+    fn set_min_group_size(&mut self, n: NN) {
+        self.min_group_size = n;
+    }
+
+    fn any_group(&self) -> bool {
+        self.any_group
+    }
+
+    fn set_any_group(&mut self, any: bool) {
+        self.any_group = any;
+    }
+
+    fn verbose(&self) -> bool {
+        self.verbose
+    }
+
+    fn set_verbose(&mut self, v: bool) {
+        self.verbose = v;
+    }
+}
+
 
 fn main() {
     let args = args::ArgProc::read_args();
     let mut tool: Box<Tool> = match args.tool() {
-        "calc" | "DirectCalcTool" => Box::new(prob::DirectCalcTool::new()),
-        "sim" | "SimTool" => Box::new(sim::SimTool::new()),
+        "calc" | "simple" | "DirectCalcTool" => Box::new(DirectCalcTool::new()),
+        "structure" |
+        "SimStructureTool" => Box::new(SimStructureTool::new()),
         other => {
             if other.trim().len() == 0 {
                 println!("No tool specified!");
@@ -93,7 +138,7 @@ fn main() {
             exit(1);
         }
     };
-    args.apply(&mut *tool);
+    args.apply(tool.args_mut());
     let group_size_range = args.group_size_range().unwrap_or((8, 10));
     let quorum_range = match args.quorum_size_range() {
         Some(r) => r,
@@ -106,8 +151,9 @@ fn main() {
     };
 
     tool.print_message();
-    println!("Total nodes n = {}", tool.total_nodes());
-    println!("Compromised nodes r = {}", tool.malicious_nodes());
+    println!("Total nodes n = {}", tool.args_mut().total_nodes());
+    println!("Compromised nodes r = {}",
+             tool.args_mut().malicious_nodes());
     println!("Min group size k on horizontal axis (cols)");
     println!("Qurom size (proportion) q on vertical axis (rows)");
 
@@ -126,7 +172,7 @@ fn main() {
         print!("{1:.0$}", W0, quorum_size);
         tool.quorum_mut().set_quorum_proportion(quorum_size);
         for group_size in group_size_range.0...group_size_range.1 {
-            tool.set_min_group_size(group_size);
+            tool.args_mut().set_min_group_size(group_size);
             let p = tool.calc_p_compromise();
             print!("{1:0$.e}", W1, p);
         }

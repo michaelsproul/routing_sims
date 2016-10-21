@@ -26,16 +26,13 @@
 // For now, because lots of stuff isn't implemented yet:
 #![allow(dead_code)]
 
-use super::{NN, RR, Tool, prob};
-use super::quorum::{Quorum, SimpleQuorum};
+use super::{NN, Error, Result};
 
 use std::cmp::{Ordering, min};
 use std::mem;
 use std::hash::{Hash, Hasher};
 use std::fmt::{self, Formatter, Binary, Debug};
 use std::collections::{HashSet, HashMap};
-use std::result;
-use std::io::{Write, stderr};
 
 use rand::{thread_rng, Rng};
 use rand::distributions::{Range, IndependentSample};
@@ -126,7 +123,7 @@ impl NameT for NN {
 // A group prefix, i.e. a sequence of bits specifying the part of the network's name space
 // consisting of all names that start with this sequence.
 #[derive(Clone, Copy, Default, Eq, Ord)]
-struct Prefix {
+pub struct Prefix {
     bit_count: usize,
     name: NN,
 }
@@ -221,23 +218,6 @@ impl Debug for Prefix {
 }
 
 
-/// Error type
-pub enum Error {
-    AlreadyExists,
-    NotFound,
-}
-/// Result type
-pub type Result<T> = result::Result<T, Error>;
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            &Error::AlreadyExists => write!(f, "already exists"),
-            &Error::NotFound => write!(f, "not found"),
-        }
-    }
-}
-
 /// Churn type
 pub enum ChurnType {
     AddInitial, // just added; other stuff may still happen
@@ -262,7 +242,7 @@ impl Node {
     }
 }
 
-struct Network {
+pub struct Network {
     min_group_size: usize,
     groups: HashMap<Prefix, HashSet<Node>>,
 }
@@ -278,6 +258,11 @@ impl Network {
             min_group_size: min_group_size,
             groups: groups,
         }
+    }
+
+    /// Access groups
+    pub fn groups(&self) -> &HashMap<Prefix, HashSet<Node>> {
+        &self.groups
     }
 
     /// Insert a node. Returns the prefix of the group added to.
@@ -335,155 +320,5 @@ impl Network {
     fn min_new_group_size(&self) -> usize {
         // mirrors RoutingTable
         self.min_group_size + 1
-    }
-}
-
-
-// TODO: different quorum
-pub struct SimTool {
-    num_nodes: NN,
-    num_malicious: NN,
-    min_group_size: NN,
-    quorum: SimpleQuorum,
-    any_group: bool,
-    verbose: bool,
-}
-
-impl SimTool {
-    pub fn new() -> Self {
-        SimTool {
-            num_nodes: 5000,
-            num_malicious: 500,
-            min_group_size: 10,
-            quorum: SimpleQuorum::new(),
-            any_group: false,
-            verbose: false,
-        }
-    }
-}
-
-impl Tool for SimTool {
-    fn total_nodes(&self) -> NN {
-        self.num_nodes
-    }
-
-    fn set_total_nodes(&mut self, n: NN) {
-        self.num_nodes = n;
-        assert!(self.num_nodes >= self.num_malicious);
-    }
-
-    fn malicious_nodes(&self) -> NN {
-        self.num_malicious
-    }
-
-    fn set_malicious_nodes(&mut self, n: NN) {
-        self.num_malicious = n;
-        assert!(self.num_nodes >= self.num_malicious);
-    }
-
-    fn min_group_size(&self) -> NN {
-        self.min_group_size
-    }
-
-    fn set_min_group_size(&mut self, n: NN) {
-        self.min_group_size = n;
-    }
-
-    fn quorum(&self) -> &Quorum {
-        &self.quorum
-    }
-
-    fn quorum_mut(&mut self) -> &mut Quorum {
-        &mut self.quorum
-    }
-
-    fn set_any(&mut self, any: bool) {
-        self.any_group = any;
-    }
-
-    fn set_verbose(&mut self, v: bool) {
-        self.verbose = v;
-    }
-
-    fn print_message(&self) {
-        println!("Tool: simulate allocation of nodes to groups; each has size at least the \
-                  specified minimum size");
-        if self.any_group {
-            println!("Output: the probability that at least one group is compromised");
-        } else {
-            println!("Output: chance of a randomly selected group being compromised");
-        }
-    }
-
-    fn calc_p_compromise(&self) -> RR {
-        // Create a network
-        let mut net = Network::new(self.min_group_size as usize);
-        let mut remaining = self.num_nodes;
-        while remaining > 0 {
-            match net.add_node() {
-                Ok(prefix) => {
-                    net.churn(ChurnType::AddInitial, prefix);
-                    remaining -= 1;
-                    if net.need_split(prefix) {
-                        net.churn(ChurnType::AddPreSplit, prefix);
-                        match net.do_split(prefix) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                panic!("Error during split: {}", e);
-                            }
-                        };
-                        net.churn(ChurnType::AddPostSplit, prefix);
-                    } else {
-                        net.churn(ChurnType::AddNoSplit, prefix);
-                    }
-                }
-                Err(Error::AlreadyExists) => {
-                    continue;
-                }
-                Err(e) => {
-                    panic!("Error adding node: {}", e);
-                }
-            };
-        }
-
-        if self.any_group {
-            // This isn't quite right, since one group not compromised does
-            // tell you _something_ about the distribution of malicious nodes,
-            // thus probabilities are not indepedent. But unless there are a lot
-            // of malicious nodes it should be close.
-            let mut p_no_compromise = 1.0;
-            for (_, group) in &net.groups {
-                let k = group.len() as NN;
-                let q = self.quorum.quorum_size(k).expect("simple quorum size");
-                let p = prob::prob_compromise(self.num_nodes, self.num_malicious, k, q);
-                p_no_compromise *= 1.0 - p;
-            }
-            1.0 - p_no_compromise
-        } else {
-            // Calculate probability of compromise of one selected group.
-
-            // Take the group appearing first in self.groups. Since hash-maps
-            // are randomly ordered in Rust, there should be nothing special
-            // about this group.
-            let (_, group) = net.groups.iter().next().expect("there should be at least one group");
-            let k = group.len() as NN;
-            let q = self.quorum.quorum_size(k).expect("simple quorum size");
-
-            // We already have code to do the rest:
-            let p = prob::prob_compromise(self.num_nodes, self.num_malicious, k, q);
-
-            if self.verbose {
-                writeln!(stderr(),
-                         "n: {}, r: {}, k: {}, q: {}, P(single group) = {:.e}",
-                         self.num_nodes,
-                         self.num_malicious,
-                         k,
-                         q,
-                         p)
-                    .expect("writing to stderr to work");
-            }
-
-            p
-        }
     }
 }

@@ -18,7 +18,7 @@
 //! Argument processing
 
 use docopt::Docopt;
-use super::{Tool, NN, RR};
+use super::{ToolArgs, NN, RR};
 
 use std::str::FromStr;
 use std::fmt::Debug;
@@ -73,27 +73,27 @@ impl ArgProc {
         &self.args.arg_tool
     }
 
-    pub fn apply(&self, tool: &mut Tool) {
+    pub fn apply(&self, tool_args: &mut ToolArgs) {
         if let Some(n) = self.args.flag_n {
-            tool.set_total_nodes(n);
+            tool_args.set_total_nodes(n);
         }
 
         if let Some(mut s) = self.args.flag_r.clone() {
             if s.ends_with('%') {
                 let _ = s.pop();
                 let perc = s.parse::<RR>().expect("In '-r x%', x should be a real number");
-                let n = tool.total_nodes() as RR;
-                tool.set_malicious_nodes((n * perc / 100.0) as NN);
+                let n = tool_args.total_nodes() as RR;
+                tool_args.set_malicious_nodes((n * perc / 100.0) as NN);
             } else {
                 s.parse::<NN>().expect("In '-r N', N should be a whole number or percentage");
             }
         } else {
-            let n = tool.total_nodes() as RR;
-            tool.set_malicious_nodes((n * 0.1) as NN);
+            let n = tool_args.total_nodes() as RR;
+            tool_args.set_malicious_nodes((n * 0.1) as NN);
         };
 
-        tool.set_any(self.args.flag_a);
-        tool.set_verbose(self.args.flag_v);
+        tool_args.set_any_group(self.args.flag_a);
+        tool_args.set_verbose(self.args.flag_v);
     }
 
     pub fn group_size_range(&self) -> Option<(NN, NN)> {

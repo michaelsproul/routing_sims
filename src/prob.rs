@@ -17,11 +17,9 @@
 
 //! Probability tools
 
-use super::{NN, RR, Tool};
-use super::quorum::{Quorum, SimpleQuorum};
+use super::{NN, RR};
 
 use std::cmp::min;
-use std::io::{Write, stderr};
 
 
 /// Calculate `n choose k`, i.e. `n! / (k! (n-k)!)`.
@@ -74,105 +72,4 @@ pub fn prob_compromise(n: NN, r: NN, k: NN, q: NN) -> RR {
     // Now, the total number of combinations in the set is
     let total_combs = choose(n, k);
     combs_compr / total_combs
-}
-
-
-pub struct DirectCalcTool {
-    num_nodes: NN,
-    num_malicious: NN,
-    min_group_size: NN,
-    quorum: SimpleQuorum,
-    any_group: bool,
-    verbose: bool,
-}
-
-impl DirectCalcTool {
-    pub fn new() -> Self {
-        DirectCalcTool {
-            num_nodes: 5000,
-            num_malicious: 500,
-            min_group_size: 10,
-            quorum: SimpleQuorum::new(),
-            any_group: false,
-            verbose: false,
-        }
-    }
-}
-
-impl Tool for DirectCalcTool {
-    fn total_nodes(&self) -> NN {
-        self.num_nodes
-    }
-
-    fn set_total_nodes(&mut self, n: NN) {
-        self.num_nodes = n;
-        assert!(self.num_nodes >= self.num_malicious);
-    }
-
-    fn malicious_nodes(&self) -> NN {
-        self.num_malicious
-    }
-
-    fn set_malicious_nodes(&mut self, n: NN) {
-        self.num_malicious = n;
-        assert!(self.num_nodes >= self.num_malicious);
-    }
-
-    fn min_group_size(&self) -> NN {
-        self.min_group_size
-    }
-
-    fn set_min_group_size(&mut self, n: NN) {
-        self.min_group_size = n;
-    }
-
-    fn quorum(&self) -> &Quorum {
-        &self.quorum
-    }
-
-    fn quorum_mut(&mut self) -> &mut Quorum {
-        &mut self.quorum
-    }
-
-    fn set_any(&mut self, any: bool) {
-        self.any_group = any;
-    }
-
-    fn set_verbose(&mut self, v: bool) {
-        self.verbose = v;
-    }
-
-    fn print_message(&self) {
-        println!("Tool: calculate probability of compromise, assuming all groups have minimum \
-                  size");
-        if self.any_group {
-            println!("Output: the probability that at least one group is compromised");
-        } else {
-            println!("Output: chance of a randomly selected group being compromised");
-        }
-    }
-
-    fn calc_p_compromise(&self) -> RR {
-        let k = self.min_group_size;
-        let q = self.quorum.quorum_size(k).expect("simple quorum size");
-        let p = prob_compromise(self.num_nodes, self.num_malicious, k, q);
-
-        if self.verbose {
-            writeln!(stderr(),
-                     "n: {}, r: {}, k: {}, q: {}, P(single group) = {:.e}",
-                     self.num_nodes,
-                     self.num_malicious,
-                     k,
-                     q,
-                     p)
-                .expect("writing to stderr to work");
-        }
-
-        if self.any_group {
-            let n_groups = (self.num_nodes as RR) / (self.min_group_size as RR);
-            1.0 - (1.0 - p).powf(n_groups)
-        } else {
-            p
-        }
-    }
 }
