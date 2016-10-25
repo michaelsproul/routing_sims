@@ -123,7 +123,7 @@ impl ToolArgs {
     fn set_verbose(&mut self, v: bool) {
         self.verbose = v;
     }
-    
+
     fn check_invariant(&self) {
         assert!(self.num_nodes >= self.num_malicious);
     }

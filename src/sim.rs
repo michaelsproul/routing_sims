@@ -252,7 +252,9 @@ impl NodeData {
         }
     }
     /// Get the age
-    pub fn age(&self) -> u32 { self.age }
+    pub fn age(&self) -> u32 {
+        self.age
+    }
     // Increment churns, and return whether this is high enough for relocation
     fn churn_and_can_age(&mut self) -> bool {
         self.churns += 1;
@@ -283,7 +285,9 @@ pub struct RestrictOnePerAge;
 impl AddRestriction for RestrictOnePerAge {
     fn can_add(node_data: &NodeData, group: &HashMap<NodeName, NodeData>) -> bool {
         let age = node_data.age;
-        if age > 1 { return true; }
+        if age > 1 {
+            return true;
+        }
         group.values().filter(|data| data.age == age).count() < 2
     }
 }
@@ -393,11 +397,11 @@ impl<AR: AddRestriction> Network<AR> {
 
     /// Do a group churn event. The churn affects all members of a group specified
     /// by `prefix` except the node causing the churn, `new_node`.
-    /// 
+    ///
     /// TODO: we could possibly make churn happen to a random group instead.
     /// The advantage is it makes it impossible for the attacker to target churn events
     /// at some group.
-    /// 
+    ///
     /// The simulation driver chooses when
     /// to trigger this. What we do is (1) age each node by 1, (2) pick the oldest node
     /// whose age is a power of 2 (there may be none) and relocate it.
@@ -420,16 +424,19 @@ impl<AR: AddRestriction> Network<AR> {
             return None;
         }
         let to_relocate = to_relocate.unwrap().0;
-        
+
         if group.len() <= self.min_group_size {
-            // Relocation is blocked to prevent the group from becoming too small, but we still need the node to age.
+            // Relocation is blocked to prevent the group from becoming too small,
+            // but we still need the node to age.
             group.get_mut(&to_relocate).expect("have node").age += 1;
         }
 
         // Remove node, age and return:
         let mut node_data = group.remove(&to_relocate).expect("have node");
         node_data.age += 1;
-        trace!("Relocating a node with age {} and churns {}", node_data.age, node_data.churns);
+        trace!("Relocating a node with age {} and churns {}",
+               node_data.age,
+               node_data.churns);
         Some((new_node_name(), node_data))
     }
 

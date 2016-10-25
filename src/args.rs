@@ -112,7 +112,7 @@ impl ArgProc {
 
         tool_args.set_any_group(self.args.flag_a);
         tool_args.set_verbose(self.args.flag_v);
-        
+
         tool_args.check_invariant();
     }
 

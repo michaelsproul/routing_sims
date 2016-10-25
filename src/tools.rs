@@ -250,7 +250,9 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
         let mut n_rejects = 0;
         while let Some((node_name, node_data)) = to_add.pop() {
             n_ops += 1;
-            trace!("Adding from a queue of length {} with {} groups", to_add.len()+1, net.groups().len());
+            trace!("Adding from a queue of length {} with {} groups",
+                   to_add.len() + 1,
+                   net.groups().len());
             let age = node_data.age();
             match net.add_node(node_name, node_data) {
                 Ok(prefix) => {
@@ -277,7 +279,11 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
                 }
             }
         }
-        info!("Init done: added {} nodes in {} steps involving {} relocates and {} rejections", num_initial, n_ops, n_relocates, n_rejects);
+        info!("Init done: added {} nodes in {} steps involving {} relocates and {} rejections",
+              num_initial,
+              n_ops,
+              n_relocates,
+              n_rejects);
 
         // 2. Start attack
         // Assumption: all nodes in the network (malicious or not) have the same performance.
