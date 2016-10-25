@@ -250,7 +250,7 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
         let mut n_rejects = 0;
         while let Some((node_name, node_data)) = to_add.pop() {
             n_ops += 1;
-            trace!("Adding from a queue of length {} with {} groups", to_add.len(), net.groups().len());
+            trace!("Adding from a queue of length {} with {} groups", to_add.len()+1, net.groups().len());
             let age = node_data.age();
             match net.add_node(node_name, node_data) {
                 Ok(prefix) => {
@@ -260,7 +260,7 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
                     // The churn may cause a removal from a group; however, either that was an
                     // old group which just got a new member, or it is a split result with at least
                     // one node more than the minimum number. Either way merging is not required.
-                    if let Some(node) = net.churn(prefix) {
+                    if let Some(node) = net.churn(prefix, node_name) {
                         n_relocates += 1;
                         to_add.push(node);
                     }
@@ -316,7 +316,7 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
                         // old group which just got a new member, or it is a split result with at
                         // least one node more than the minimum number. Either way merging
                         // is not required.
-                        if let Some(node) = net.churn(prefix) {
+                        if let Some(node) = net.churn(prefix, node_name) {
                             if attack.reset_node(&node, net.find_prefix(node_name)) {
                                 n_new_malicious += 1;
                             } else {

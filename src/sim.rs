@@ -230,24 +230,24 @@ pub fn new_node_name() -> NodeName {
 /// Data stored for a node
 #[derive(Clone, Copy)]
 pub struct NodeData {
-    age: u32, // initial age is 1
-    churns: u32, // initial churns is 1
+    age: u32, // initial age is 0
+    churns: u32, // initial churns is 0
     is_malicious: bool,
 }
 impl NodeData {
     /// New data (initial age and churns, not malicious)
     pub fn new() -> Self {
         NodeData {
-            age: 1,
-            churns: 1,
+            age: 0,
+            churns: 0,
             is_malicious: false,
         }
     }
     /// New data (initial age and churns, is malicious)
     pub fn new_malicious() -> Self {
         NodeData {
-            age: 1,
-            churns: 1,
+            age: 0,
+            churns: 0,
             is_malicious: true,
         }
     }
@@ -284,7 +284,7 @@ impl AddRestriction for RestrictOnePerAge {
     fn can_add(node_data: &NodeData, group: &HashMap<NodeName, NodeData>) -> bool {
         let age = node_data.age;
         if age > 1 { return true; }
-        group.values().filter(|data| data.age == age).count() < 1
+        group.values().filter(|data| data.age == age).count() < 2
     }
 }
 
@@ -325,7 +325,7 @@ impl<AR: AddRestriction> Network<AR> {
     pub fn add_node(&mut self, node_name: NodeName, node_data: NodeData) -> Result<Prefix> {
         let prefix = self.find_prefix(node_name);
         let mut group = self.groups.get_mut(&prefix).expect("network must include all groups");
-        if !AR::can_add(&node_data, group) {
+        if group.len() > self.min_group_size && !AR::can_add(&node_data, group) {
             return Err(Error::AddRestriction);
         }
         match group.entry(node_name) {
@@ -391,15 +391,25 @@ impl<AR: AddRestriction> Network<AR> {
         Ok((prefix0, prefix1))
     }
 
-    /// Do a group churn event. The simulation driver chooses when
+    /// Do a group churn event. The churn affects all members of a group specified
+    /// by `prefix` except the node causing the churn, `new_node`.
+    /// 
+    /// TODO: we could possibly make churn happen to a random group instead.
+    /// The advantage is it makes it impossible for the attacker to target churn events
+    /// at some group.
+    /// 
+    /// The simulation driver chooses when
     /// to trigger this. What we do is (1) age each node by 1, (2) pick the oldest node
     /// whose age is a power of 2 (there may be none) and relocate it.
     /// On relocation, the node is returned (the driver should call add_node with it).
-    pub fn churn(&mut self, prefix: Prefix) -> Option<(NodeName, NodeData)> {
+    pub fn churn(&mut self, prefix: Prefix, new_node: NodeName) -> Option<(NodeName, NodeData)> {
         let mut group = self.groups.get_mut(&prefix).expect("churn called with invalid group");
         // Increment churn counters and see if any is ready to be relocated.
         let mut to_relocate: Option<(NodeName, u32)> = None;
         for (node_name, ref mut node_data) in group.iter_mut() {
+            if *node_name == new_node {
+                continue;   // skip this node
+            }
             if node_data.churn_and_can_age() {
                 if to_relocate.map_or(true, |n| node_data.churns > n.1) {
                     to_relocate = Some((*node_name, node_data.churns));
@@ -410,9 +420,14 @@ impl<AR: AddRestriction> Network<AR> {
             return None;
         }
         let to_relocate = to_relocate.unwrap().0;
+        
+        if group.len() <= self.min_group_size {
+            // Relocation is blocked to prevent the group from becoming too small, but we still need the node to age.
+            group.get_mut(&to_relocate).expect("have node").age += 1;
+        }
 
         // Remove node, age and return:
-        let mut node_data = group.remove(&to_relocate).expect("have node to relocate");
+        let mut node_data = group.remove(&to_relocate).expect("have node");
         node_data.age += 1;
         trace!("Relocating a node with age {} and churns {}", node_data.age, node_data.churns);
         Some((new_node_name(), node_data))
