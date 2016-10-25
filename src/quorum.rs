@@ -18,8 +18,11 @@
 //! Quorum
 
 use super::{NN, RR};
+use super::sim::{Prefix, Node, NodeName, NodeData};
+use std::collections::HashMap;
 
 
+/// Describes the "quorum" algorithm
 pub trait Quorum {
     /// Get number of nodes needed for a quorum, given group size k.
     ///
@@ -31,8 +34,12 @@ pub trait Quorum {
     /// Specify proportion of group agreement required, range 0-1. Use slightly
     /// greater than half if number must be greater than 50%.
     fn set_quorum_proportion(&mut self, prop: RR);
+
+    /// Returns true if there is not a quorum of good nodes in the passed group.
+    fn quorum_disrupted(&self, group: &HashMap<NodeName, NodeData>) -> bool;
 }
 
+/// Quorum based on simply meeting some minimum proportion of the group.
 pub struct SimpleQuorum {
     proportion: RR,
 }
@@ -51,5 +58,31 @@ impl Quorum for SimpleQuorum {
 
     fn set_quorum_proportion(&mut self, prop: RR) {
         self.proportion = prop;
+    }
+
+    fn quorum_disrupted(&self, group: &HashMap<NodeName, NodeData>) -> bool {
+        let good = group.iter().filter(|node| !node.1.is_malicious()).count() as RR;
+        let all = group.len() as RR;
+        good / all < self.proportion
+    }
+}
+
+
+/// Determines a few things about how attacks work.
+///
+/// A clone is made for each simulation, which may hold mutable state.
+/// This state is lost at the end of the simulation.
+pub trait AttackStrategy: Clone {
+    /// This should return true if the attacker decides to reset this malicious node.
+    fn reset_node(&mut self, node: &Node, prefix: Prefix) -> bool;
+}
+
+/// Strategy which does not involve any targetting.
+#[derive(Clone)]
+pub struct UntargettedAttack;
+
+impl AttackStrategy for UntargettedAttack {
+    fn reset_node(&mut self, _node: &Node, _prefix: Prefix) -> bool {
+        false
     }
 }

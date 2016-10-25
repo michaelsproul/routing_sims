@@ -33,8 +33,9 @@ use std::process::exit;
 use std::result;
 use std::fmt::{self, Formatter};
 
-use tools::{Tool, DirectCalcTool, SimStructureTool};
+use tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool};
 use args::QuorumRange;
+use quorum::*;
 
 
 // We could use templating but there's no reason not to do the easy thing and
@@ -45,6 +46,7 @@ pub type RR = f64;
 
 /// Error type
 pub enum Error {
+    AddRestriction,
     AlreadyExists,
     NotFound,
 }
@@ -54,6 +56,7 @@ pub type Result<T> = result::Result<T, Error>;
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
+            &Error::AddRestriction => write!(f, "addition prevented by AddRestriction"),
             &Error::AlreadyExists => write!(f, "already exists"),
             &Error::NotFound => write!(f, "not found"),
         }
@@ -66,6 +69,8 @@ pub struct ToolArgs {
     min_group_size: NN,
     any_group: bool,
     verbose: bool,
+    max_steps: NN,
+    repetitions: NN,
 }
 impl ToolArgs {
     fn new() -> Self {
@@ -75,6 +80,8 @@ impl ToolArgs {
             min_group_size: 10,
             any_group: false,
             verbose: false,
+            max_steps: 10000,
+            repetitions: 100,
         }
     }
 
@@ -125,16 +132,16 @@ impl ToolArgs {
 fn main() {
     let args = args::ArgProc::read_args();
     let mut tool: Box<Tool> = match args.tool() {
-        "calc" | "simple" | "DirectCalcTool" => Box::new(DirectCalcTool::new()),
-        "structure" |
-        "SimStructureTool" => Box::new(SimStructureTool::new()),
+        "calc" | "simple" => Box::new(DirectCalcTool::new()),
+        "structure" => Box::new(SimStructureTool::new()),
+        "age_only" => Box::new(FullSimTool::new(SimpleQuorum::new(), UntargettedAttack {})),
         other => {
             if other.trim().len() == 0 {
                 println!("No tool specified!");
             } else {
                 println!("Tool not recognised: {}", other);
             }
-            println!("Tools available: DirectCalcTool (\"calc\"), SimTool (\"sim\")");
+            println!("Run with --help for a list of tools.");
             exit(1);
         }
     };

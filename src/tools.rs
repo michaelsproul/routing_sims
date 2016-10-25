@@ -19,11 +19,13 @@
 
 
 use super::{NN, RR, ToolArgs, Error};
-use super::quorum::{Quorum, SimpleQuorum};
+use super::quorum::{Quorum, SimpleQuorum, AttackStrategy};
 use super::prob::prob_compromise;
-use super::sim::{Network, ChurnType};
+use super::sim::{Network, new_node_name, NodeData, NoAddRestriction, RestrictOnePerAge};
 
 use std::io::{Write, stderr};
+use std::iter;
+use std::collections::VecDeque;
 
 
 pub trait Tool {
@@ -106,6 +108,8 @@ impl Tool for DirectCalcTool {
 /// network between groups), then does direct calculations based on these
 /// groups. This should be more accurate than DirectCalcTool in "any group"
 /// mode, but has the same limitations.
+///
+/// Does not relocate nodes (node ageing).
 pub struct SimStructureTool {
     args: ToolArgs,
     quorum: SimpleQuorum,
@@ -141,25 +145,14 @@ impl Tool for SimStructureTool {
 
     fn calc_p_compromise(&self) -> RR {
         // Create a network
-        let mut net = Network::new(self.args.min_group_size() as usize);
+        let mut net = Network::<NoAddRestriction>::new(self.args.min_group_size() as usize);
         let mut remaining = self.args.total_nodes();
         while remaining > 0 {
-            match net.add_node() {
+            let name = new_node_name();
+            match net.add_node(name, NodeData::new()) {
                 Ok(prefix) => {
-                    net.churn(ChurnType::AddInitial, prefix);
                     remaining -= 1;
-                    if net.need_split(prefix) {
-                        net.churn(ChurnType::AddPreSplit, prefix);
-                        match net.do_split(prefix) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                panic!("Error during split: {}", e);
-                            }
-                        };
-                        net.churn(ChurnType::AddPostSplit, prefix);
-                    } else {
-                        net.churn(ChurnType::AddNoSplit, prefix);
-                    }
+                    let _prefix = net.maybe_split(prefix, name);
                 }
                 Err(Error::AlreadyExists) => {
                     continue;
@@ -210,5 +203,173 @@ impl Tool for SimStructureTool {
 
             p
         }
+    }
+}
+
+
+/// A tool which simulates group operations.
+///
+/// Can relocate nodes according to the node ageing RFC (roughly).
+pub struct FullSimTool<Q: Quorum, A: AttackStrategy> {
+    args: ToolArgs,
+    quorum: Q,
+    attack: A,
+}
+
+impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
+    pub fn new(quorum: Q, strategy: A) -> Self {
+        FullSimTool {
+            args: ToolArgs::new(),
+            quorum: quorum,
+            attack: strategy,
+        }
+    }
+
+    // Run a simulation. Return true if a compromise occurred. Only supports
+    // "any group" mode.
+    fn run_sim(&self) -> bool {
+        assert!(self.args.any_group);
+        let mut attack = self.attack.clone();
+
+        // 1. Create initial network.
+        // For simplicity, we ignore all add-attempts which fail due to age restrictions
+        // (these do not affect the network and would simply be re-added later).
+        // Because of this and the assumption that all these nodes are "good",
+        // we do not need to simulate proof-of-work here.
+        let mut net = Network::<RestrictOnePerAge>::new(self.args.min_group_size() as usize);
+        let num_initial = self.args.total_nodes() - self.args.malicious_nodes();
+        // Pre-generate all nodes to be added, in a Vec.
+        // We can pop from this and on relocation push.
+        let mut to_add: Vec<_> = iter::repeat(0)
+            .take(num_initial as usize)
+            .map(|_| (new_node_name(), NodeData::new()))
+            .collect();
+        while let Some((node_name, node_data)) = to_add.pop() {
+            match net.add_node(node_name, node_data) {
+                Ok(prefix) => {
+                    let prefix = net.maybe_split(prefix, node_name);
+                    // Add successful: do churn event.
+                    // The churn may cause a removal from a group; however, either that was an
+                    // old group which just got a new member, or it is a split result with at least
+                    // one node more than the minimum number. Either way merging is not required.
+                    if let Some(node) = net.churn(prefix) {
+                        to_add.push(node);
+                    }
+                }
+                Err(Error::AlreadyExists) |
+                Err(Error::AddRestriction) => {
+                    // We fixed the number of initial nodes. If this one is incompatible,
+                    // find another.
+                    to_add.push((new_node_name(), NodeData::new()));
+                }
+                Err(e) => {
+                    panic!("Error adding node: {}", e);
+                }
+            }
+        }
+
+        // 2. Start attack
+        // Assumption: all nodes in the network (malicious or not) have the same performance.
+        // Proof-of-work time-outs can be used to filter out any nodes with slow CPU/network.
+        // We use a step, which is how long proof-of-work takes. We don't set a value here, but
+        // for example 10000 × 1-hour steps is over a year.
+
+        // Assumption: only malicious nodes are added after this time, and a fixed number. This
+        // is a worst case scenario; if there were background-adding of other nodes or if all the
+        // attacking nodes were not added simultaneously, the attack would be harder.
+
+        // Assumption: the network gives joining nodes a group immediately, but does not
+        // accept the node as a member until after proof-of-work. Nodes can choose to reset before
+        // doing the work. We assume nodes will not try to reset at any other time.
+        // We assume that nodes can reset and try to join again (with age 0) instantly. This may
+        // be problematic if some nodes target groups purely to cause churn events.
+
+        // Unlike above, we now use a two-step join process: (1) nodes are "pre-added": they are
+        // given a name and group, then either reset or wait until (2) nodes have done
+        // proof-of-work and can join.
+
+        // Assumption: if a node has done proof-of-work but its original target group splits, it
+        // simply joins whichever group it would now be in. If a node has done proof of work and
+        // is not accepted due to age restrictions, it is given a new name and must redo work.
+        let mut n_new_malicious = self.args.malicious_nodes();
+        // Queue of nodes doing proof-of-work. Push to back, pop from front.
+        let mut waiting = VecDeque::new();
+        for _ in 0..self.args.max_steps {
+            // Each round, we firstly deal with all "waiting" nodes, then add any new/reset nodes.
+            while let Some((node_name, node_data)) = waiting.pop_front() {
+                match net.add_node(node_name, node_data) {
+                    Ok(prefix) => {
+                        let prefix = net.maybe_split(prefix, node_name);
+                        // Add successful: do churn event.
+                        // The churn may cause a removal from a group; however, either that was an
+                        // old group which just got a new member, or it is a split result with at
+                        // least one node more than the minimum number. Either way merging
+                        // is not required.
+                        if let Some(node) = net.churn(prefix) {
+                            if attack.reset_node(&node, net.find_prefix(node_name)) {
+                                n_new_malicious += 1;
+                            } else {
+                                waiting.push_back(node);
+                            }
+                        }
+                    }
+                    Err(Error::AlreadyExists) |
+                    Err(Error::AddRestriction) => {
+                        // Cannot be added: rename and try again next round.
+                        let node = (new_node_name(), node_data);
+                        waiting.push_back(node);
+                    }
+                    Err(e) => {
+                        panic!("Error adding node: {}", e);
+                    }
+                }
+            }
+
+            while n_new_malicious > 0 {
+                let node = (new_node_name(), NodeData::new_malicious());
+                let prefix = net.find_prefix(node.0);
+                if !attack.reset_node(&node, prefix) {
+                    n_new_malicious -= 1;
+                    waiting.push_back(node);
+                }
+            }
+
+            // Finally, we check if a compromise-of-quorum occurred.
+            for (_, ref group) in net.groups() {
+                if self.quorum.quorum_disrupted(group) {
+                    return true;
+                }
+            }
+        }
+
+        // If we didn't return already, no compromise occurred
+        false
+    }
+}
+
+impl<Q: Quorum, A: AttackStrategy> Tool for FullSimTool<Q, A> {
+    fn args_mut(&mut self) -> &mut ToolArgs {
+        &mut self.args
+    }
+
+    fn quorum_mut(&mut self) -> &mut Quorum {
+        &mut self.quorum
+    }
+
+    fn print_message(&self) {
+        println!("Tool: simulate group operations");
+        if self.args.any_group() {
+            println!("Output: the probability that at least one group is compromised");
+        } else {
+            println!("Output: chance of a randomly selected group being compromised");
+        }
+    }
+
+    fn calc_p_compromise(&self) -> RR {
+        let compromises = iter::repeat(0)
+            .take(self.args.repetitions as usize)
+            .filter(|_| self.run_sim())
+            .count() as RR;
+        compromises / (self.args.repetitions as RR)
     }
 }

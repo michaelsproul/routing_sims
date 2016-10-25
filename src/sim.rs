@@ -32,7 +32,10 @@ use std::cmp::{Ordering, min};
 use std::mem;
 use std::hash::{Hash, Hasher};
 use std::fmt::{self, Formatter, Binary, Debug};
-use std::collections::{HashSet, HashMap};
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::marker::PhantomData;
+use std::u64;
 
 use rand::{thread_rng, Rng};
 use rand::distributions::{Range, IndependentSample};
@@ -218,65 +221,138 @@ impl Debug for Prefix {
 }
 
 
-/// Churn type
-pub enum ChurnType {
-    AddInitial, // just added; other stuff may still happen
-    AddPreSplit, // group split is about to happen
-    AddPostSplit, // final add notification: after splitting
-    AddNoSplit, // final add notification: no split
+/// Type of a node name
+pub type NodeName = u64;
+/// Generate a new node name
+pub fn new_node_name() -> NodeName {
+    sample_NN()
 }
-
-/// A node in the network.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct Node {
-    name: NN,
-    age: NN,
+/// Data stored for a node
+#[derive(Clone, Copy)]
+pub struct NodeData {
+    age: u32, // initial age is 1
+    churns: u32, // initial churns is 1
+    is_malicious: bool,
 }
-impl Node {
-    /// Create a new node with random name and age 0
-    pub fn new_random() -> Self {
-        Node {
-            name: sample_NN(),
-            age: 0,
+impl NodeData {
+    /// New data (initial age and churns, not malicious)
+    pub fn new() -> Self {
+        NodeData {
+            age: 1,
+            churns: 1,
+            is_malicious: false,
         }
+    }
+    /// New data (initial age and churns, is malicious)
+    pub fn new_malicious() -> Self {
+        NodeData {
+            age: 1,
+            churns: 1,
+            is_malicious: true,
+        }
+    }
+    // Increment churns, and return whether this is high enough for relocation
+    fn churn_and_can_age(&mut self) -> bool {
+        self.churns += 1;
+        self.churns >= 2u32.pow(self.age)
+    }
+    /// Is this node malicous?
+    pub fn is_malicious(&self) -> bool {
+        self.is_malicious
     }
 }
 
-pub struct Network {
-    min_group_size: usize,
-    groups: HashMap<Prefix, HashSet<Node>>,
+/// Type of a node
+pub type Node = (NodeName, NodeData);
+
+
+pub trait AddRestriction {
+    // May prevent add operation, for example if the group has too many nodes
+    // of this age.
+    fn can_add(_node_data: &NodeData, _group: &HashMap<NodeName, NodeData>) -> bool {
+        true
+    }
 }
 
-impl Network {
+pub struct NoAddRestriction;
+impl AddRestriction for NoAddRestriction {}
+
+pub struct RestrictOnePerAge;
+impl AddRestriction for RestrictOnePerAge {
+    fn can_add(node_data: &NodeData, group: &HashMap<NodeName, NodeData>) -> bool {
+        let age = node_data.age;
+        group.values().all(|data| data.age != age)
+    }
+}
+
+pub struct Network<AddRestriction> {
+    min_group_size: usize,
+    groups: HashMap<Prefix, HashMap<NodeName, NodeData>>,
+    _dummy: PhantomData<AddRestriction>,
+}
+
+impl<AR: AddRestriction> Network<AR> {
     /// Create. Specify minimum group size.
     ///
     /// An initial, empty, group is created.
     pub fn new(min_group_size: usize) -> Self {
         let mut groups = HashMap::new();
-        groups.insert(Prefix::new(0, 0), HashSet::new());
+        groups.insert(Prefix::new(0, 0), HashMap::new());
         Network {
             min_group_size: min_group_size,
             groups: groups,
+            _dummy: PhantomData {},
         }
     }
 
     /// Access groups
-    pub fn groups(&self) -> &HashMap<Prefix, HashSet<Node>> {
+    pub fn groups(&self) -> &HashMap<Prefix, HashMap<NodeName, NodeData>> {
         &self.groups
     }
 
-    /// Insert a node. Returns the prefix of the group added to.
-    pub fn add_node(&mut self) -> Result<Prefix> {
-        let node = Node::new_random();
-        let prefix = *self.groups
+    /// Get the prefix for the group to which this name belongs.
+    pub fn find_prefix(&self, name: NodeName) -> Prefix {
+        *self.groups
             .keys()
-            .find(|prefix| prefix.matches(node.name))
-            .expect("some prefix must match every name");
+            .find(|prefix| prefix.matches(name))
+            .expect("some prefix must match every name")
+    }
+
+    /// Insert a node. Returns the prefix of the group added to.
+    pub fn add_node(&mut self, node_name: NodeName, node_data: NodeData) -> Result<Prefix> {
+        let prefix = self.find_prefix(node_name);
         let mut group = self.groups.get_mut(&prefix).expect("network must include all groups");
-        if !group.insert(node) {
-            return Err(Error::AlreadyExists);
+        if !AR::can_add(&node_data, group) {
+            return Err(Error::AddRestriction);
         }
+        match group.entry(node_name) {
+            Entry::Vacant(e) => e.insert(node_data),
+            Entry::Occupied(_) => {
+                return Err(Error::AlreadyExists);
+            }
+        };
         Ok(prefix)
+    }
+
+    /// Check need_split and if true call do_split. Return the prefix matching
+    /// `name` (the input prefix, if no split occurs).
+    pub fn maybe_split(&mut self, prefix: Prefix, name: NodeName) -> Prefix {
+        if !self.need_split(prefix) {
+            return prefix;
+        }
+        match self.do_split(prefix) {
+            Ok((p0, p1)) => {
+                if p0.matches(name) {
+                    p0
+                } else {
+                    assert!(p1.matches(name));
+                    p1
+                }
+            }
+            Err(e) => {
+                panic!("Error during split: {}", e);
+            }
+        }
     }
 
     /// Check whether some group needs splitting.
@@ -289,7 +365,7 @@ impl Network {
         };
         let prefix0 = prefix.pushed(false);
         let size_all = group.len();
-        let size0 = group.iter().filter(|node| prefix0.matches(node.name)).count();
+        let size0 = group.iter().filter(|node| prefix0.matches(*node.0)).count();
         size0 >= self.min_new_group_size() && size_all - size0 >= self.min_new_group_size()
     }
 
@@ -304,7 +380,7 @@ impl Network {
         let prefix0 = prefix.pushed(false);
         let prefix1 = prefix.pushed(true);
         let (group0, group1) = old_group.into_iter()
-            .partition::<HashSet<_>, _>(|node| prefix0.matches(node.name));
+            .partition(|node| prefix0.matches(node.0));
         let inserted = self.groups.insert(prefix0, group0).is_none();
         assert!(inserted);
         let inserted = self.groups.insert(prefix1, group1).is_none();
@@ -312,9 +388,30 @@ impl Network {
         Ok((prefix0, prefix1))
     }
 
-    /// Notification of some type of group churn (see `ChurnType`).
-    pub fn churn(&mut self, _type: ChurnType, _prefix: Prefix) {
-        // some node ageing stuff will happen here...
+    /// Do a group churn event. The simulation driver chooses when
+    /// to trigger this. What we do is (1) age each node by 1, (2) pick the oldest node
+    /// whose age is a power of 2 (there may be none) and relocate it.
+    /// On relocation, the node is returned (the driver should call add_node with it).
+    pub fn churn(&mut self, prefix: Prefix) -> Option<(NodeName, NodeData)> {
+        let mut group = self.groups.get_mut(&prefix).expect("churn called with invalid group");
+        // Increment churn counters and see if any is ready to be relocated.
+        let mut to_relocate: Option<(NodeName, u32)> = None;
+        for (node_name, ref mut node_data) in group.iter_mut() {
+            if node_data.churn_and_can_age() {
+                if to_relocate.map_or(false, |n| node_data.churns > n.1) {
+                    to_relocate = Some((*node_name, node_data.churns));
+                }
+            }
+        }
+        if to_relocate.is_none() {
+            return None;
+        }
+        let to_relocate = to_relocate.unwrap().0;
+
+        // Remove node, age and return:
+        let mut node_data = group.remove(&to_relocate).expect("have node to relocate");
+        node_data.age += 1;
+        Some((new_node_name(), node_data))
     }
 
     fn min_new_group_size(&self) -> usize {
