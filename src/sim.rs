@@ -283,7 +283,7 @@ pub struct RestrictOnePerAge;
 impl AddRestriction for RestrictOnePerAge {
     fn can_add(node_data: &NodeData, group: &HashMap<NodeName, NodeData>) -> bool {
         let age = node_data.age;
-        group.values().all(|data| data.age != age)
+        group.values().filter(|data| data.age == age).count() < 2
     }
 }
 
@@ -400,7 +400,7 @@ impl<AR: AddRestriction> Network<AR> {
         let mut to_relocate: Option<(NodeName, u32)> = None;
         for (node_name, ref mut node_data) in group.iter_mut() {
             if node_data.churn_and_can_age() {
-                if to_relocate.map_or(false, |n| node_data.churns > n.1) {
+                if to_relocate.map_or(true, |n| node_data.churns > n.1) {
                     to_relocate = Some((*node_name, node_data.churns));
                 }
             }
