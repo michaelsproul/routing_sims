@@ -283,7 +283,8 @@ pub struct RestrictOnePerAge;
 impl AddRestriction for RestrictOnePerAge {
     fn can_add(node_data: &NodeData, group: &HashMap<NodeName, NodeData>) -> bool {
         let age = node_data.age;
-        group.values().filter(|data| data.age == age).count() < 2
+        if age > 1 { return true; }
+        group.values().filter(|data| data.age == age).count() < 1
     }
 }
 
