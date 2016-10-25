@@ -88,18 +88,18 @@ impl ArgProc {
             tool_args.set_total_nodes(n);
         }
 
-        if let Some(mut s) = self.args.flag_r.clone() {
+        tool_args.num_malicious = if let Some(mut s) = self.args.flag_r.clone() {
             if s.ends_with('%') {
                 let _ = s.pop();
                 let perc = s.parse::<RR>().expect("In '-r x%', x should be a real number");
-                let n = tool_args.total_nodes() as RR;
-                tool_args.set_malicious_nodes((n * perc / 100.0) as NN);
+                let n = tool_args.num_nodes as RR;
+                (n * perc / 100.0) as NN
             } else {
-                s.parse::<NN>().expect("In '-r N', N should be a whole number or percentage");
+                s.parse::<NN>().expect("In '-r N', N should be a whole number or percentage")
             }
         } else {
             let n = tool_args.total_nodes() as RR;
-            tool_args.set_malicious_nodes((n * 0.1) as NN);
+            (n * 0.1) as NN
         };
 
         if let Some(s) = self.args.flag_s {
@@ -112,6 +112,8 @@ impl ArgProc {
 
         tool_args.set_any_group(self.args.flag_a);
         tool_args.set_verbose(self.args.flag_v);
+        
+        tool_args.check_invariant();
     }
 
     pub fn group_size_range(&self) -> Option<(NN, NN)> {

@@ -91,7 +91,6 @@ impl ToolArgs {
 
     fn set_total_nodes(&mut self, n: NN) {
         self.num_nodes = n;
-        assert!(self.num_nodes >= self.num_malicious);
     }
 
     fn malicious_nodes(&self) -> NN {
@@ -100,7 +99,6 @@ impl ToolArgs {
 
     fn set_malicious_nodes(&mut self, n: NN) {
         self.num_malicious = n;
-        assert!(self.num_nodes >= self.num_malicious);
     }
 
     fn min_group_size(&self) -> NN {
@@ -125,6 +123,10 @@ impl ToolArgs {
 
     fn set_verbose(&mut self, v: bool) {
         self.verbose = v;
+    }
+    
+    fn check_invariant(&self) {
+        assert!(self.num_nodes >= self.num_malicious);
     }
 }
 
