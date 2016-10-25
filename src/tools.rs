@@ -268,12 +268,6 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
                 Err(Error::AlreadyExists) |
                 Err(Error::AddRestriction) => {
                     n_rejects += 1;
-                    // It seems we need more churn events, so do a churn anyway.
-                    let prefix = net.find_prefix(node_name);
-                    if let Some(node) = net.churn(prefix) {
-                        n_relocates += 1;
-                        to_add.push(node);
-                    }
                     // We fixed the number of initial nodes. If this one is incompatible,
                     // find another.
                     to_add.push((new_node_name(), NodeData::new()));
@@ -332,11 +326,6 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
                     }
                     Err(Error::AlreadyExists) |
                     Err(Error::AddRestriction) => {
-                        // It seems we need more churn events, so do a churn anyway.
-                        let prefix = net.find_prefix(node_name);
-                        if let Some(node) = net.churn(prefix) {
-                            to_add.push(node);
-                        }
                         // Cannot be added: rename and try again next round.
                         let node = (new_node_name(), node_data);
                         waiting.push_back(node);
