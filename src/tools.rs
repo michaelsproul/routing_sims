@@ -245,7 +245,11 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
             .take(num_initial as usize)
             .map(|_| (new_node_name(), NodeData::new()))
             .collect();
+        let mut n_ops = 0;
+        let mut n_relocates = 0;
+        let mut n_rejects = 0;
         while let Some((node_name, node_data)) = to_add.pop() {
+            n_ops += 1;
             trace!("Adding from a queue of length {} with {} groups", to_add.len(), net.groups().len());
             let age = node_data.age();
             match net.add_node(node_name, node_data) {
@@ -257,14 +261,17 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
                     // old group which just got a new member, or it is a split result with at least
                     // one node more than the minimum number. Either way merging is not required.
                     if let Some(node) = net.churn(prefix) {
+                        n_relocates += 1;
                         to_add.push(node);
                     }
                 }
                 Err(Error::AlreadyExists) |
                 Err(Error::AddRestriction) => {
+                    n_rejects += 1;
                     // It seems we need more churn events, so do a churn anyway.
                     let prefix = net.find_prefix(node_name);
                     if let Some(node) = net.churn(prefix) {
+                        n_relocates += 1;
                         to_add.push(node);
                     }
                     // We fixed the number of initial nodes. If this one is incompatible,
@@ -276,7 +283,7 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
                 }
             }
         }
-        info!("Init done");
+        info!("Init done: added {} nodes in {} steps involving {} relocates and {} rejections", num_initial, n_ops, n_relocates, n_rejects);
 
         // 2. Start attack
         // Assumption: all nodes in the network (malicious or not) have the same performance.

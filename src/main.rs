@@ -164,7 +164,7 @@ fn main() {
     println!("Compromised nodes r = {}",
              tool.args_mut().malicious_nodes());
     println!("Min group size k on horizontal axis (cols)");
-    println!("Qurom size (proportion) q on vertical axis (rows)");
+    println!("Quorom size (proportion) q on vertical axis (rows)");
 
     const W0: usize = 3;      // width first column
     const W1: usize = 24;     // width other columns
