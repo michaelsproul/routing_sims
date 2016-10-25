@@ -228,6 +228,7 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
     // Run a simulation. Return true if a compromise occurred. Only supports
     // "any group" mode.
     fn run_sim(&self) -> bool {
+        info!("Starting sim");
         assert!(self.args.any_group);
         let mut attack = self.attack.clone();
 
@@ -245,8 +246,11 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
             .map(|_| (new_node_name(), NodeData::new()))
             .collect();
         while let Some((node_name, node_data)) = to_add.pop() {
+            trace!("Adding from a queue of length {} with {} groups", to_add.len(), net.groups().len());
+            let age = node_data.age();
             match net.add_node(node_name, node_data) {
                 Ok(prefix) => {
+                    trace!("Added node {} with age {}", node_name, age);
                     let prefix = net.maybe_split(prefix, node_name);
                     // Add successful: do churn event.
                     // The churn may cause a removal from a group; however, either that was an
@@ -267,6 +271,7 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
                 }
             }
         }
+        info!("Init done");
 
         // 2. Start attack
         // Assumption: all nodes in the network (malicious or not) have the same performance.

@@ -22,6 +22,9 @@
 extern crate rand;
 extern crate rustc_serialize;
 extern crate docopt;
+#[macro_use]
+extern crate log;
+extern crate env_logger;
 
 mod prob;
 mod sim;
@@ -97,10 +100,6 @@ impl ToolArgs {
         self.num_malicious
     }
 
-    fn set_malicious_nodes(&mut self, n: NN) {
-        self.num_malicious = n;
-    }
-
     fn min_group_size(&self) -> NN {
         self.min_group_size
     }
@@ -132,6 +131,7 @@ impl ToolArgs {
 
 
 fn main() {
+    env_logger::init().unwrap();
     let args = args::ArgProc::read_args();
     let mut tool: Box<Tool> = match args.tool() {
         "calc" | "simple" => Box::new(DirectCalcTool::new()),

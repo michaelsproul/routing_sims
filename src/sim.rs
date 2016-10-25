@@ -251,6 +251,8 @@ impl NodeData {
             is_malicious: true,
         }
     }
+    /// Get the age
+    pub fn age(&self) -> u32 { self.age }
     // Increment churns, and return whether this is high enough for relocation
     fn churn_and_can_age(&mut self) -> bool {
         self.churns += 1;
@@ -411,6 +413,7 @@ impl<AR: AddRestriction> Network<AR> {
         // Remove node, age and return:
         let mut node_data = group.remove(&to_relocate).expect("have node to relocate");
         node_data.age += 1;
+        trace!("Relocating a node with age {} and churns {}", node_data.age, node_data.churns);
         Some((new_node_name(), node_data))
     }
 
