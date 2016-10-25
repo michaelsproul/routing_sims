@@ -137,6 +137,7 @@ fn main() {
         "calc" | "simple" => Box::new(DirectCalcTool::new()),
         "structure" => Box::new(SimStructureTool::new()),
         "age_only" => Box::new(FullSimTool::new(SimpleQuorum::new(), UntargettedAttack {})),
+        "age_quorum" => Box::new(FullSimTool::new(AgeQuorum::new(), UntargettedAttack {})),
         other => {
             if other.trim().len() == 0 {
                 println!("No tool specified!");

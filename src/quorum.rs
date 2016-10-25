@@ -67,6 +67,47 @@ impl Quorum for SimpleQuorum {
     }
 }
 
+/// Quorum which requires some proportion of group age as well as number
+///
+/// We require the same proportion of age as of the number of nodes (although
+/// these could be separated).
+pub struct AgeQuorum {
+    proportion: RR,
+}
+
+impl AgeQuorum {
+    /// New structure. Default to requiring a quorum of the entire group.
+    pub fn new() -> Self {
+        AgeQuorum { proportion: 1.0 }
+    }
+}
+
+impl Quorum for AgeQuorum {
+    fn quorum_size(&self, _: NN) -> Option<NN> {
+        None
+    }
+
+    fn set_quorum_proportion(&mut self, prop: RR) {
+        self.proportion = prop;
+    }
+
+    fn quorum_disrupted(&self, group: &HashMap<NodeName, NodeData>) -> bool {
+        let n_nodes = group.len() as RR;
+        let mut sum_age = 0;
+        let mut n_good = 0;
+        let mut good_age = 0;
+        for data in group.values() {
+            sum_age += data.age();
+            if !data.is_malicious() {
+                n_good += 1;
+                good_age += data.age();
+            }
+        }
+        (n_good as RR) / n_nodes < self.proportion &&
+        (good_age as RR) / (sum_age as RR) < self.proportion
+    }
+}
+
 
 /// Determines a few things about how attacks work.
 ///
