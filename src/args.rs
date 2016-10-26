@@ -29,7 +29,13 @@ Probability computation tool.
 
 Usage:
     routing-sims [-h | --help]
-    routing-sims <tool> [-n NUM] [-r VAL] [-k RANGE] [-q RANGE] [-a] [-v]
+    routing-sims <tool> [-n NUM] [-r VAL] [-k RANGE] [-q RANGE] [-s VAL] [-p VAL] [-a] [-v]
+
+Tools:
+    calc        Direct calculation: all groups have min size, no ageing or targetting
+    structure   Simulate group structure, but no ageing or targetting
+    age_only    Simulate node ageing, but not targetting. Simple quorum.
+    age_quorum  Simulate node ageing, but not targetting. Quorum uses age.
 
 Options:
     -h --help   Show this message
@@ -37,6 +43,9 @@ Options:
     -r VAL      Either number of compromised nodes (e.g. 50) or percentage (default is 10%).
     -k RANGE    Minimum group size, e.g. 10-20.
     -q RANGE    Quorum size as a percentage with step size, e.g. 50-90:10.
+    -s VAL      Maximum number of steps, each the length of one proof-of-work.
+    -p VAL      Number of times to repeat a true/false simulation to calculate
+                an attack success probability.
     -a          Show probabilities of any group being compromised instead of a selected group
     -v          Verbose output to stderr (redirect either this or stdout to avoid confusion)
 ";
@@ -48,6 +57,8 @@ struct Args {
     flag_r: Option<String>,
     flag_k: Option<String>,
     flag_q: Option<String>,
+    flag_s: Option<NN>,
+    flag_p: Option<NN>,
     flag_a: bool,
     flag_v: bool,
 }
@@ -60,6 +71,7 @@ pub struct QuorumRange {
 pub struct ArgProc {
     args: Args,
 }
+
 impl ArgProc {
     pub fn read_args() -> ArgProc {
         let args: Args = Docopt::new(USAGE)
@@ -78,22 +90,32 @@ impl ArgProc {
             tool_args.set_total_nodes(n);
         }
 
-        if let Some(mut s) = self.args.flag_r.clone() {
+        tool_args.num_malicious = if let Some(mut s) = self.args.flag_r.clone() {
             if s.ends_with('%') {
                 let _ = s.pop();
                 let perc = s.parse::<RR>().expect("In '-r x%', x should be a real number");
-                let n = tool_args.total_nodes() as RR;
-                tool_args.set_malicious_nodes((n * perc / 100.0) as NN);
+                let n = tool_args.num_nodes as RR;
+                (n * perc / 100.0) as NN
             } else {
-                s.parse::<NN>().expect("In '-r N', N should be a whole number or percentage");
+                s.parse::<NN>().expect("In '-r N', N should be a whole number or percentage")
             }
         } else {
             let n = tool_args.total_nodes() as RR;
-            tool_args.set_malicious_nodes((n * 0.1) as NN);
+            (n * 0.1) as NN
         };
+
+        if let Some(s) = self.args.flag_s {
+            tool_args.max_steps = s;
+        }
+
+        if let Some(p) = self.args.flag_p {
+            tool_args.repetitions = p;
+        }
 
         tool_args.set_any_group(self.args.flag_a);
         tool_args.set_verbose(self.args.flag_v);
+
+        tool_args.check_invariant();
     }
 
     pub fn group_size_range(&self) -> Option<(NN, NN)> {
