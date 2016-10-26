@@ -34,8 +34,10 @@ Usage:
 Tools:
     calc        Direct calculation: all groups have min size, no ageing or targetting
     structure   Simulate group structure, but no ageing or targetting
-    age_only    Simulate node ageing, but not targetting. Simple quorum.
+    age_simple  Simulate node ageing, but not targetting. Simple quorum.
     age_quorum  Simulate node ageing, but not targetting. Quorum uses age.
+    targetted_age_simple    Simulate node ageing, a simple targetted attack, with the simple quorum
+    targetted_age_quorum    Simulate node ageing, a simple targetted attack, using age in the quorum
 
 Options:
     -h --help   Show this message

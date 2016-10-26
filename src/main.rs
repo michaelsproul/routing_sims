@@ -138,8 +138,10 @@ fn main() {
     let mut tool: Box<Tool> = match args.tool() {
         "calc" | "simple" => Box::new(DirectCalcTool::new()),
         "structure" => Box::new(SimStructureTool::new()),
-        "age_only" => Box::new(FullSimTool::new(SimpleQuorum::new(), UntargettedAttack {})),
+        "age_simple" => Box::new(FullSimTool::new(SimpleQuorum::new(), UntargettedAttack {})),
         "age_quorum" => Box::new(FullSimTool::new(AgeQuorum::new(), UntargettedAttack {})),
+        "targetted_age_simple" => Box::new(FullSimTool::new(SimpleQuorum::new(), SimpleTargettedAttack::new())),
+        "targetted_age_quorum" => Box::new(FullSimTool::new(AgeQuorum::new(), SimpleTargettedAttack::new())),
         other => {
             if other.trim().len() == 0 {
                 println!("No tool specified!");
