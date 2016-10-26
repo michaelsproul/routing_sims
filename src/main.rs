@@ -53,6 +53,7 @@ pub enum Error {
     AlreadyExists,
     NotFound,
 }
+
 /// Result type
 pub type Result<T> = result::Result<T, Error>;
 
@@ -75,6 +76,7 @@ pub struct ToolArgs {
     max_steps: NN,
     repetitions: NN,
 }
+
 impl ToolArgs {
     fn new() -> Self {
         ToolArgs {

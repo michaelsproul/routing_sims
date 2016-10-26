@@ -33,6 +33,7 @@ pub fn choose(n: NN, mut k: NN) -> RR {
     }
     result
 }
+
 #[test]
 fn test_choose() {
     assert_eq!(choose(15, 0) as NN, 1);

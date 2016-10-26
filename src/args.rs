@@ -71,6 +71,7 @@ pub struct QuorumRange {
 pub struct ArgProc {
     args: Args,
 }
+
 impl ArgProc {
     pub fn read_args() -> ArgProc {
         let args: Args = Docopt::new(USAGE)

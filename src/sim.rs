@@ -223,10 +223,12 @@ impl Debug for Prefix {
 
 /// Type of a node name
 pub type NodeName = u64;
+
 /// Generate a new node name
 pub fn new_node_name() -> NodeName {
     sample_NN()
 }
+
 /// Data stored for a node
 #[derive(Clone, Copy)]
 pub struct NodeData {
@@ -234,6 +236,7 @@ pub struct NodeData {
     churns: u32, // initial churns is 0
     is_malicious: bool,
 }
+
 impl NodeData {
     /// New data (initial age and churns, not malicious)
     pub fn new() -> Self {
@@ -243,6 +246,7 @@ impl NodeData {
             is_malicious: false,
         }
     }
+
     /// New data (initial age and churns, is malicious)
     pub fn new_malicious() -> Self {
         NodeData {
@@ -251,15 +255,18 @@ impl NodeData {
             is_malicious: true,
         }
     }
+
     /// Get the age
     pub fn age(&self) -> u32 {
         self.age
     }
+
     // Increment churns, and return whether this is high enough for relocation
     fn churn_and_can_age(&mut self) -> bool {
         self.churns += 1;
         self.churns >= 2u32.pow(self.age)
     }
+
     /// Is this node malicous?
     pub fn is_malicious(&self) -> bool {
         self.is_malicious
