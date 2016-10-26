@@ -326,10 +326,18 @@ impl<AR: AddRestriction> Network<AR> {
 
     /// Get the prefix for the group to which this name belongs.
     pub fn find_prefix(&self, name: NodeName) -> Prefix {
-        *self.groups
-            .keys()
-            .find(|prefix| prefix.matches(name))
-            .expect("some prefix must match every name")
+        // There are two strategies here:
+        // 1) iterate through all groups, checking for prefix match
+        // 2) iterate through all possible prefixes of name, looking each up in the group table
+        // The second scales much better with large numbers of groups, and should
+        // still be fairly fast with few groups because in this case the prefixes will be small.
+        for bits in 0..(mem::size_of::<NN>() * 8) {
+            let prefix = Prefix::new(bits, name);
+            if self.groups.contains_key(&prefix) {
+                return prefix;
+            }
+        }
+        unreachable!()
     }
 
     /// Insert a node. Returns the prefix of the group added to.
