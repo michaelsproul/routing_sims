@@ -27,6 +27,7 @@
 #![allow(dead_code)]
 
 use super::{NN, Error, Result};
+use super::quorum::AttackStrategy;
 
 use std::cmp::{Ordering, min};
 use std::mem;
@@ -299,9 +300,11 @@ impl AddRestriction for RestrictOnePerAge {
     }
 }
 
+pub type Group = HashMap<NodeName, NodeData>;
+
 pub struct Network<AddRestriction> {
     min_group_size: usize,
-    groups: HashMap<Prefix, HashMap<NodeName, NodeData>>,
+    groups: HashMap<Prefix, Group>,
     _dummy: PhantomData<AddRestriction>,
 }
 
@@ -358,11 +361,11 @@ impl<AR: AddRestriction> Network<AR> {
 
     /// Check need_split and if true call do_split. Return the prefix matching
     /// `name` (the input prefix, if no split occurs).
-    pub fn maybe_split(&mut self, prefix: Prefix, name: NodeName) -> Prefix {
+    pub fn maybe_split(&mut self, prefix: Prefix, name: NodeName, attack: &mut AttackStrategy) -> Prefix {
         if !self.need_split(prefix) {
             return prefix;
         }
-        match self.do_split(prefix) {
+        match self.do_split(prefix, attack) {
             Ok((p0, p1)) => {
                 if p0.matches(name) {
                     p0
@@ -392,7 +395,10 @@ impl<AR: AddRestriction> Network<AR> {
     }
 
     /// Do a split. Return prefixes of new groups.
-    pub fn do_split(&mut self, prefix: Prefix) -> Result<(Prefix, Prefix)> {
+    pub fn do_split(&mut self,
+                    prefix: Prefix,
+                    attack: &mut AttackStrategy)
+                    -> Result<(Prefix, Prefix)> {
         let old_group = match self.groups.remove(&prefix) {
             Some(g) => g,
             None => {
@@ -401,8 +407,18 @@ impl<AR: AddRestriction> Network<AR> {
         };
         let prefix0 = prefix.pushed(false);
         let prefix1 = prefix.pushed(true);
-        let (group0, group1) = old_group.into_iter()
+        let (group0, group1): (Group, Group) = old_group.into_iter()
             .partition(|node| prefix0.matches(node.0));
+        for (name, data) in &group0 {
+            if data.is_malicious {
+                attack.split(prefix, prefix0, *name, data);
+            }
+        }
+        for (name, data) in &group1 {
+            if data.is_malicious {
+                attack.split(prefix, prefix1, *name, data);
+            }
+        }
         let inserted = self.groups.insert(prefix0, group0).is_none();
         assert!(inserted);
         let inserted = self.groups.insert(prefix1, group1).is_none();

@@ -113,7 +113,13 @@ impl Quorum for AgeQuorum {
 ///
 /// A clone is made for each simulation, which may hold mutable state.
 /// This state is lost at the end of the simulation.
-pub trait AttackStrategy: Clone {
+pub trait AttackStrategy {
+    /// Called when splitting occurs
+    fn split(&mut self,
+             old_prefix: Prefix,
+             new_prefix: Prefix,
+             node_name: NodeName,
+             node_data: &NodeData);
     /// This should return true if the attacker decides to reset this malicious node.
     fn reset_node(&mut self, node: &Node, prefix: Prefix) -> bool;
 }
@@ -123,7 +129,47 @@ pub trait AttackStrategy: Clone {
 pub struct UntargettedAttack;
 
 impl AttackStrategy for UntargettedAttack {
+    fn split(&mut self,
+             _old_prefix: Prefix,
+             _new_prefix: Prefix,
+             _node_name: NodeName,
+             _node_data: &NodeData) {
+    }
     fn reset_node(&mut self, _node: &Node, _prefix: Prefix) -> bool {
         false
+    }
+}
+
+/// Strategy which targets a group. This is very simple and naive; better
+/// strategies are possible with node ageing.
+#[derive(Clone)]
+pub struct SimpleTargettedAttack {
+    target: Option<Prefix>,
+}
+
+impl SimpleTargettedAttack {
+    pub fn new() -> Self {
+        SimpleTargettedAttack { target: None }
+    }
+}
+
+impl AttackStrategy for SimpleTargettedAttack {
+    fn split(&mut self,
+             old_prefix: Prefix,
+             new_prefix: Prefix,
+             _node_name: NodeName,
+             _node_data: &NodeData) {
+        if self.target == Some(old_prefix) {
+            self.target = Some(new_prefix);
+        }
+    }
+
+    fn reset_node(&mut self, _node: &Node, prefix: Prefix) -> bool {
+        if let Some(target) = self.target {
+            prefix != target
+        } else {
+            self.target = Some(prefix);
+            false
+        }
     }
 }

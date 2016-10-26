@@ -19,7 +19,7 @@
 
 
 use super::{NN, RR, ToolArgs, Error};
-use super::quorum::{Quorum, SimpleQuorum, AttackStrategy};
+use super::quorum::{Quorum, SimpleQuorum, AttackStrategy, UntargettedAttack};
 use super::prob::prob_compromise;
 use super::sim::{Network, new_node_name, NodeData, NoAddRestriction, RestrictOnePerAge};
 
@@ -144,6 +144,9 @@ impl Tool for SimStructureTool {
     }
 
     fn calc_p_compromise(&self) -> RR {
+        // We need an "attack" strategy, though we only support one here
+        let mut attack = UntargettedAttack {};
+        
         // Create a network
         let mut net = Network::<NoAddRestriction>::new(self.args.min_group_size() as usize);
         let mut remaining = self.args.total_nodes();
@@ -152,7 +155,7 @@ impl Tool for SimStructureTool {
             match net.add_node(name, NodeData::new()) {
                 Ok(prefix) => {
                     remaining -= 1;
-                    let _prefix = net.maybe_split(prefix, name);
+                    let _prefix = net.maybe_split(prefix, name, &mut attack);
                 }
                 Err(Error::AlreadyExists) => {
                     continue;
@@ -210,13 +213,13 @@ impl Tool for SimStructureTool {
 /// A tool which simulates group operations.
 ///
 /// Can relocate nodes according to the node ageing RFC (roughly).
-pub struct FullSimTool<Q: Quorum, A: AttackStrategy> {
+pub struct FullSimTool<Q: Quorum, A: AttackStrategy+Clone> {
     args: ToolArgs,
     quorum: Q,
     attack: A,
 }
 
-impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
+impl<Q: Quorum, A: AttackStrategy+Clone> FullSimTool<Q, A> {
     pub fn new(quorum: Q, strategy: A) -> Self {
         FullSimTool {
             args: ToolArgs::new(),
@@ -257,7 +260,7 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
             match net.add_node(node_name, node_data) {
                 Ok(prefix) => {
                     trace!("Added node {} with age {}", node_name, age);
-                    let prefix = net.maybe_split(prefix, node_name);
+                    let prefix = net.maybe_split(prefix, node_name, &mut attack);
                     // Add successful: do churn event.
                     // The churn may cause a removal from a group; however, either that was an
                     // old group which just got a new member, or it is a split result with at least
@@ -316,14 +319,15 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
             while let Some((node_name, node_data)) = waiting.pop_front() {
                 match net.add_node(node_name, node_data) {
                     Ok(prefix) => {
-                        let prefix = net.maybe_split(prefix, node_name);
+                        let prefix = net.maybe_split(prefix, node_name, &mut attack);
                         // Add successful: do churn event.
                         // The churn may cause a removal from a group; however, either that was an
                         // old group which just got a new member, or it is a split result with at
                         // least one node more than the minimum number. Either way merging
                         // is not required.
                         if let Some(node) = net.churn(prefix, node_name) {
-                            if attack.reset_node(&node, net.find_prefix(node_name)) {
+                            if node.1.is_malicious() &&
+                               attack.reset_node(&node, net.find_prefix(node_name)) {
                                 n_new_malicious += 1;
                             } else {
                                 waiting.push_back(node);
@@ -364,7 +368,7 @@ impl<Q: Quorum, A: AttackStrategy> FullSimTool<Q, A> {
     }
 }
 
-impl<Q: Quorum, A: AttackStrategy> Tool for FullSimTool<Q, A> {
+impl<Q: Quorum, A: AttackStrategy+Clone> Tool for FullSimTool<Q, A> {
     fn args_mut(&mut self) -> &mut ToolArgs {
         &mut self.args
     }
