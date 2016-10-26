@@ -427,15 +427,16 @@ impl<AR: AddRestriction> Network<AR> {
                 }
             }
         }
-        if to_relocate.is_none() {
-            return None;
-        }
-        let to_relocate = to_relocate.unwrap().0;
+        let to_relocate = match to_relocate {
+            Some(r) => r.0,
+            None => return None,
+        };
 
         if group.len() <= self.min_group_size {
             // Relocation is blocked to prevent the group from becoming too small,
             // but we still need the node to age.
             group.get_mut(&to_relocate).expect("have node").age += 1;
+            return None;
         }
 
         // Remove node, age and return:
