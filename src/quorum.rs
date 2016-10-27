@@ -49,6 +49,11 @@ impl SimpleQuorum {
     pub fn new() -> Self {
         SimpleQuorum { proportion: 1.0 }
     }
+
+    /// New structure, with specified proportion requried.
+    pub fn from(prop: RR) -> Self {
+        SimpleQuorum { proportion: prop }
+    }
 }
 
 impl Quorum for SimpleQuorum {

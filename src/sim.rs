@@ -361,7 +361,11 @@ impl<AR: AddRestriction> Network<AR> {
 
     /// Check need_split and if true call do_split. Return the prefix matching
     /// `name` (the input prefix, if no split occurs).
-    pub fn maybe_split(&mut self, prefix: Prefix, name: NodeName, attack: &mut AttackStrategy) -> Prefix {
+    pub fn maybe_split(&mut self,
+                       prefix: Prefix,
+                       name: NodeName,
+                       attack: &mut AttackStrategy)
+                       -> Prefix {
         if !self.need_split(prefix) {
             return prefix;
         }
