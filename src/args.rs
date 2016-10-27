@@ -24,7 +24,6 @@ use super::quorum::*;
 
 use std::str::FromStr;
 use std::fmt::Debug;
-use std::process::exit;
 use std::ops::AddAssign;
 use std::cmp::Ordering;
 
@@ -35,47 +34,56 @@ Probability computation tool.
 
 Usage:
     routing-sims [-h | --help]
-    routing-sims \
-     <tool> [-n NUM] [-r VAL] [-k RANGE] [-q RANGE] [-s VAL] [-p VAL]
+    routing-sims calc \
+     [-n RANGE] [-r RANGE] [-k RANGE] [-q RANGE] [-s VAL] [-p VAL]
+    routing-sims structure [-n \
+     RANGE] [-r RANGE] [-k RANGE] [-q RANGE] [-s VAL] [-p VAL]
+    routing-sims full [-n RANGE] \
+     [-r RANGE] [-k RANGE] [-q RANGE] [-s VAL] [-p VAL] [-Q QTYPE] [-T TTYPE]
 
 Tools:
     calc        \
      Direct calculation: all groups have min size, no ageing or targetting
     structure   \
      Simulate group structure, but no ageing or targetting
-    age_simple  Simulate node ageing, \
-     but not targetting. Simple quorum.
-    age_quorum  Simulate node ageing, but not targetting. \
-     Quorum uses age.
-    targetted_age_simple    Simulate node ageing, a simple targetted \
-     attack, with the simple quorum
-    targetted_age_quorum    Simulate node ageing, a simple \
-     targetted attack, using age in the quorum
+    full        Full simulation (see \
+     -Q and -T parameters)
 
 Options:
     -h --help   Show this message
-    -n RANGE    Number of nodes, total, e.g. 1000-5000:1000.
+    -n RANGE    Number of \
+     nodes, total, e.g. 1000-5000:1000.
     -r RANGE    Either number of compromised nodes (e.g. \
      50) or percentage (default is 10%).
     -k RANGE    Minimum group size, e.g. 10-20.
     -q \
      RANGE    Quorum size as a proportion with step size, e.g. 0.5-0.7:0.1.
-    -s VAL      Maximum \
-     number of steps, each the length of one proof-of-work.
-    -p VAL      Number of times to \
+    -s VAL      \
+     Maximum number of steps, each the length of one proof-of-work.
+    -p VAL      Number of \
+     times to 
      repeat a true/false simulation to calculate
-                an attack success probability.
+                an attack success \
+     probability.
+    -Q QTYPE    Quorum algorithm: simple, age or all
+    -T TTYPE    Attack \
+     targetting strategy: none, simple or all
 ";
 
+#[allow(non_snake_case)]
 #[derive(RustcDecodable)]
 struct Args {
-    arg_tool: String,
+    cmd_calc: bool,
+    cmd_structure: bool,
+    cmd_full: bool,
     flag_n: Option<String>,
     flag_r: Option<String>,
     flag_k: Option<String>,
     flag_q: Option<String>,
     flag_s: Option<NN>,
     flag_p: Option<NN>,
+    flag_Q: Option<String>,
+    flag_T: Option<String>,
 }
 
 pub trait DefaultStep<T> {
@@ -240,28 +248,38 @@ impl ArgProc {
             self.args.flag_q.as_ref().map_or(Iterable::Number(0.5), |s| s.parse().expect("parse"));
         let mut quorum_iter = quorum_range.iter();
 
+        let q_use_age = match self.args.flag_Q.as_ref().map(|s| s.as_str()) {
+            None => vec![false],
+            Some("simple") => vec![false],
+            Some("age") => vec![true],
+            Some("all") => vec![false, true],
+            Some(x) => panic!("unexpected: -Q {}", x),
+        };
+        let mut q_use_age_iter = q_use_age.iter();
+
+        let at_type = match self.args.flag_T.as_ref().map(|s| s.as_str()) {
+            None => vec![AttackType::Untargetted],
+            Some("none") => vec![AttackType::Untargetted],
+            Some("simple") => vec![AttackType::SimpleTargetted],
+            Some("all") => vec![AttackType::Untargetted, AttackType::SimpleTargetted],
+            Some(x) => panic!("unexpected: -T {}", x),
+        };
+        let mut at_type_iter = at_type.iter();
+
         // Create initial parameter set
-        let tool = match self.args.arg_tool.as_str() {
-            "calc" | "simple" => (SimType::DirectCalc, false, false),
-            "structure" => (SimType::Structure, false, false),
-            "age_simple" => (SimType::FullSim, false, false),
-            "age_quorum" => (SimType::FullSim, true, false),
-            "targetted_age_simple" => (SimType::FullSim, false, true),
-            "targetted_age_quorum" => (SimType::FullSim, true, true),
-            other => {
-                if other.trim().len() == 0 {
-                    println!("No tool specified!");
-                } else {
-                    println!("Tool not recognised: {}", other);
-                }
-                println!("Run with --help for a list of tools.");
-                exit(1);
-            }
+        let tool = if self.args.cmd_calc {
+            SimType::DirectCalc
+        } else if self.args.cmd_structure {
+            SimType::Structure
+        } else if self.args.cmd_full {
+            SimType::FullSim
+        } else {
+            unreachable!()
         };
         v.push(SimParams {
-            sim_type: tool.0,
-            node_ageing: tool.1,
-            targetting: tool.2,
+            sim_type: tool,
+            age_quorum: *q_use_age_iter.next().expect("first iter item"),
+            targetting: *at_type_iter.next().expect("first iter item"),
             num_nodes: nodes_iter.next().expect("first iter item"),
             num_malicious: mal_nodes_iter.next().expect("first iter item"),
             min_group_size: group_size_iter.next().expect("first iter item"),
@@ -311,6 +329,26 @@ impl ArgProc {
             }
         }
 
+        // Replicate for all quorum types
+        let range = 0..v.len();
+        for q in q_use_age_iter {
+            for i in range.clone() {
+                let mut s = v[i].clone();
+                s.age_quorum = *q;
+                v.push(s);
+            }
+        }
+
+        // Replicate for all attack strategies
+        let range = 0..v.len();
+        for at in at_type_iter {
+            for i in range.clone() {
+                let mut s = v[i].clone();
+                s.targetting = *at;
+                v.push(s);
+            }
+        }
+
         v
     }
 }
@@ -328,6 +366,21 @@ impl SimType {
             SimType::DirectCalc => "dir_calc",
             SimType::Structure => "structure",
             SimType::FullSim => "full_sim",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum AttackType {
+    Untargetted,
+    SimpleTargetted,
+}
+
+impl AttackType {
+    pub fn name(&self) -> &'static str {
+        match self {
+            &AttackType::Untargetted => "untarg.",
+            &AttackType::SimpleTargetted => "simp_targ",
         }
     }
 }
@@ -391,19 +444,19 @@ impl DefaultStep<RelOrAbs> for RelOrAbs {
 }
 
 pub const PARAM_TITLES: [&'static str; 9] = ["Type",
-                                             "Ageing",
+                                             "AgeQuorum",
                                              "Targetting",
                                              "Nodes",
                                              "Malicious",
                                              "MinGroup",
-                                             "Quorum",
+                                             "QuorumProp",
                                              "P(disruption)",
                                              "P(compromise)"];
 #[derive(Clone)]
 pub struct SimParams {
     pub sim_type: SimType,
-    pub node_ageing: bool,
-    pub targetting: bool,
+    pub age_quorum: bool,
+    pub targetting: AttackType,
     pub num_nodes: NN,
     pub num_malicious: RelOrAbs,
     pub min_group_size: NN,
@@ -431,21 +484,19 @@ impl SimParams {
             SimType::FullSim => {
                 // note: FullSimTool is templated on quorum and attack strategy parameters, so
                 // we need to create the whole thing at once (not create parameters first)
-                match (self.node_ageing, self.targetting) {
-                    (false, false) => {
+                match (self.age_quorum, self.targetting) {
+                    (false, AttackType::Untargetted) => {
                         Box::new(FullSimTool::new(args, SimpleQuorum::new(), UntargettedAttack {}))
                     }
-                    (true, false) => {
+                    (true, AttackType::Untargetted) => {
                         Box::new(FullSimTool::new(args, AgeQuorum::new(), UntargettedAttack {}))
                     }
-                    (false, true) => {
+                    (false, AttackType::SimpleTargetted) => {
                         Box::new(FullSimTool::new(args,
                                                   SimpleQuorum::new(),
                                                   SimpleTargettedAttack::new()))
                     }
-                    // TODO: isn't this combination going to involve infinite
-                    // node rejoining? Strategy may need changing.
-                    (true, true) => {
+                    (true, AttackType::SimpleTargetted) => {
                         Box::new(FullSimTool::new(args,
                                                   AgeQuorum::new(),
                                                   SimpleTargettedAttack::new()))

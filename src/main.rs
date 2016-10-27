@@ -109,9 +109,9 @@ fn main() {
     for (params, results) in param_sets.iter().zip(results) {
         print!("{1:<0$}", col_widths[0], params.sim_type.name());
         print!(" ");
-        print!("{1:<0$}", col_widths[1], params.node_ageing);
+        print!("{1:<0$}", col_widths[1], params.age_quorum);
         print!(" ");
-        print!("{1:<0$}", col_widths[2], params.targetting);
+        print!("{1:<0$}", col_widths[2], params.targetting.name());
         print!(" ");
         print!("{1:<0$}", col_widths[3], params.num_nodes);
         print!(" ");
