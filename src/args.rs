@@ -26,6 +26,7 @@ use std::str::FromStr;
 use std::fmt::Debug;
 use std::process::exit;
 use std::ops::AddAssign;
+use std::cmp::Ordering;
 
 
 const USAGE: &'static str =
@@ -53,9 +54,8 @@ Tools:
 
 Options:
     -h --help   Show this message
-    -n \
-     NUM      Number of nodes, total, e.g. 1000-5000:1000.
-    -r RANGE      Either number of compromised nodes (e.g. \
+    -n RANGE    Number of nodes, total, e.g. 1000-5000:1000.
+    -r RANGE    Either number of compromised nodes (e.g. \
      50) or percentage (default is 10%).
     -k RANGE    Minimum group size, e.g. 10-20.
     -q \
@@ -79,17 +79,21 @@ struct Args {
 }
 
 pub trait DefaultStep<T> {
-    fn default_step() -> T;
+    // Return a default step.
+    //
+    // The value `x` is passed so that RelOrAbs can see whether it's being
+    // used in relative or absolute form.
+    fn default_step(x: T) -> T;
 }
 
 impl DefaultStep<NN> for NN {
-    fn default_step() -> NN {
+    fn default_step(_: NN) -> NN {
         1
     }
 }
 
 impl DefaultStep<RR> for RR {
-    fn default_step() -> RR {
+    fn default_step(_: RR) -> RR {
         1.0
     }
 }
@@ -171,7 +175,7 @@ impl<'a, T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T> + 'a> Iter
                         self.prev
                     },
                     Some(mut x) => {
-                        let step = step.unwrap_or(T::default_step());
+                        let step = step.unwrap_or(T::default_step(start));
                         x += step;
                         self.prev = Some(x);
                         if x > stop {
@@ -222,9 +226,16 @@ impl ArgProc {
         let nodes_range: Iterable<NN> =
             self.args.flag_n.as_ref().map_or(Iterable::Number(1000), |s| s.parse().expect("parse"));
         let mut nodes_iter = nodes_range.iter();
+
+        let mal_nodes_range: Iterable<RelOrAbs> =
+            self.args.flag_r.as_ref().map_or(Iterable::Number(RelOrAbs::Rel(0.1)),
+                                             |s| s.parse().expect("parse"));
+        let mut mal_nodes_iter = mal_nodes_range.iter();
+
         let group_size_range: Iterable<NN> =
             self.args.flag_k.as_ref().map_or(Iterable::Number(10), |s| s.parse().expect("parse"));
         let mut group_size_iter = group_size_range.iter();
+
         let quorum_range =
             self.args.flag_q.as_ref().map_or(Iterable::Number(0.5), |s| s.parse().expect("parse"));
         let mut quorum_iter = quorum_range.iter();
@@ -252,7 +263,7 @@ impl ArgProc {
             node_ageing: tool.1,
             targetting: tool.2,
             num_nodes: nodes_iter.next().expect("first iter item"),
-            num_malicious: self.num_malicious(),
+            num_malicious: mal_nodes_iter.next().expect("first iter item"),
             min_group_size: group_size_iter.next().expect("first iter item"),
             quorum_prop: quorum_iter.next().expect("first iter item"),
             max_steps: self.args.flag_s.unwrap_or(1000),
@@ -265,6 +276,17 @@ impl ArgProc {
             for i in range.clone() {
                 let mut s = v[i].clone();
                 s.num_nodes = n;
+                v.push(s);
+            }
+        }
+
+        // Replicate for all numbers of malicious nodes
+        let range = 0..v.len();
+        for r in mal_nodes_iter {
+            for i in range.clone() {
+                let mut s = v[i].clone();
+                // NOTE: it's important that we replicate over num_nodes first!
+                s.num_malicious = r;
                 v.push(s);
             }
         }
@@ -291,21 +313,6 @@ impl ArgProc {
 
         v
     }
-
-    fn num_malicious(&self) -> RelOrAbs {
-        if let Some(mut s) = self.args.flag_r.clone() {
-            if s.ends_with('%') {
-                let _ = s.pop();
-                let perc = s.parse::<RR>().expect("In '-r x%', x should be a real number");
-                RelOrAbs::Rel(perc * 0.01)
-            } else {
-                RelOrAbs::Abs(s.parse::<NN>()
-                    .expect("In '-r N', N should be a whole number or percentage"))
-            }
-        } else {
-            RelOrAbs::Rel(0.1)
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -325,7 +332,7 @@ impl SimType {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RelOrAbs {
     Rel(RR),
     Abs(NN),
@@ -336,6 +343,49 @@ impl RelOrAbs {
         match self {
             RelOrAbs::Rel(r) => ((base as RR) * r) as NN,
             RelOrAbs::Abs(n) => n,
+        }
+    }
+}
+
+impl FromStr for RelOrAbs {
+    type Err = ();  // we just panic!
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.ends_with('%') {
+            let mut s = s.to_string();
+            let _ = s.pop();
+            let perc = s.parse::<RR>().expect("parse");
+            Ok(RelOrAbs::Rel(perc * 0.01))
+        } else {
+            Ok(RelOrAbs::Abs(s.parse().expect("parse")))
+        }
+    }
+}
+
+impl AddAssign for RelOrAbs {
+    fn add_assign(&mut self, rhs: RelOrAbs) {
+        match (self, rhs) {
+            (&mut RelOrAbs::Rel(ref mut x), RelOrAbs::Rel(y)) => *x += y,
+            (&mut RelOrAbs::Abs(ref mut x), RelOrAbs::Abs(y)) => *x += y,
+            _ => panic!("wrong rel/abs type!"),
+        }
+    }
+}
+
+impl PartialOrd<RelOrAbs> for RelOrAbs {
+    fn partial_cmp(&self, rhs: &RelOrAbs) -> Option<Ordering> {
+        match (self, rhs) {
+            (&RelOrAbs::Rel(x), &RelOrAbs::Rel(ref y)) => x.partial_cmp(y),
+            (&RelOrAbs::Abs(x), &RelOrAbs::Abs(ref y)) => x.partial_cmp(y),
+            _ => panic!("wrong rel/abs type!"),
+        }
+    }
+}
+
+impl DefaultStep<RelOrAbs> for RelOrAbs {
+    fn default_step(x: RelOrAbs) -> RelOrAbs {
+        match x {
+            RelOrAbs::Rel(_) => RelOrAbs::Rel(0.1),
+            RelOrAbs::Abs(_) => RelOrAbs::Abs(1),
         }
     }
 }
