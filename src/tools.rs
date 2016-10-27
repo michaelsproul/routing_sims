@@ -27,6 +27,9 @@ use std::iter;
 use std::collections::VecDeque;
 
 
+pub type SimResult = RR;
+
+
 pub trait Tool {
     /// Print a message about the computation (does not include parameters).
     fn print_message(&self);

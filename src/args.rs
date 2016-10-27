@@ -19,13 +19,16 @@
 
 use docopt::Docopt;
 use super::{ToolArgs, NN, RR};
-use super::tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool};
+use super::tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool, SimResult};
 use super::quorum::*;
 
 use std::str::FromStr;
 use std::fmt::Debug;
 use std::process::exit;
 use std::cmp::max;
+
+use rayon::prelude::*;
+use rayon::par_iter::collect::collect_into;
 
 
 const USAGE: &'static str =
@@ -261,7 +264,7 @@ struct SimParams {
 }
 
 impl SimParams {
-    fn make_tool(&self) -> Box<Tool> {
+    fn result(&self) -> SimResult {
         let args = ToolArgs {
             num_nodes: self.num_nodes,
             num_malicious: self.num_malicious.from_base(self.num_nodes),
@@ -273,7 +276,7 @@ impl SimParams {
         };
         args.check_invariant();
 
-        match self.sim_type {
+        let tool: Box<Tool> = match self.sim_type {
             SimType::DirectCalc => Box::new(DirectCalcTool::new(args)),
             SimType::Structure => Box::new(SimStructureTool::new(args)),
             SimType::FullSim => {
@@ -300,7 +303,9 @@ impl SimParams {
                     }
                 }
             }
-        }
+        };
+
+        tool.calc_p_compromise()
     }
 }
 
@@ -308,14 +313,13 @@ impl SimParams {
 
 pub fn main() {
     let args = ArgProc::read_args();
-    let params = args.make_sim_params();
+    let param_sets = args.make_sim_params();
 
     info!("Starting to simulate {} different parameter sets",
-          params.len());
-    // TODO: par_iter with Rayon:
-    let results: Vec<_> = params.iter()
-        .map(|p| (p, p.make_tool().calc_p_compromise()))
-        .collect();
+          param_sets.len());
+    let mut results = Vec::new();
+    collect_into(param_sets.par_iter().map(|item| item.result()),
+                 &mut results);
 
     //     tool.print_message();
     let col_widths: Vec<usize> = PARAM_TITLES.iter().map(|name| max(name.len(), 10)).collect();
@@ -325,24 +329,24 @@ pub fn main() {
     }
     println!();
 
-    for result in results {
-        print!("{1:0$}", col_widths[0], result.0.sim_type.name());
+    for (params, results) in param_sets.iter().zip(results) {
+        print!("{1:0$}", col_widths[0], params.sim_type.name());
         print!(" ");
-        print!("{1:0$}", col_widths[1], result.0.node_ageing);
+        print!("{1:0$}", col_widths[1], params.node_ageing);
         print!(" ");
-        print!("{1:0$}", col_widths[2], result.0.targetting);
+        print!("{1:0$}", col_widths[2], params.targetting);
         print!(" ");
-        print!("{1:0$}", col_widths[3], result.0.num_nodes);
+        print!("{1:0$}", col_widths[3], params.num_nodes);
         print!(" ");
         print!("{1:0$}",
                col_widths[4],
-               result.0.num_malicious.from_base(result.0.num_nodes));
+               params.num_malicious.from_base(params.num_nodes));
         print!(" ");
-        print!("{1:0$}", col_widths[5], result.0.min_group_size);
+        print!("{1:0$}", col_widths[5], params.min_group_size);
         print!(" ");
-        print!("{1:0$}", col_widths[6], result.0.quorum_prop);
+        print!("{1:0$}", col_widths[6], params.quorum_prop);
         print!(" ");
-        print!("{1:0$}", col_widths[7], result.1);
+        print!("{1:0$}", col_widths[7], results);
         println!();
     }
 }
