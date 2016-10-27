@@ -35,6 +35,12 @@ mod tools;
 
 use std::result;
 use std::fmt::{self, Formatter};
+use std::cmp::max;
+
+use rayon::prelude::*;
+use rayon::par_iter::collect::collect_into;
+
+use args::{ArgProc, PARAM_TITLES};
 
 
 // We could use templating but there's no reason not to do the easy thing and
@@ -83,5 +89,43 @@ impl ToolArgs {
 
 fn main() {
     env_logger::init().unwrap();
-    args::main();
+
+    let param_sets = ArgProc::read_args().make_sim_params();
+
+    info!("Starting to simulate {} different parameter sets",
+          param_sets.len());
+    let mut results = Vec::new();
+    collect_into(param_sets.par_iter().map(|item| item.result()),
+                 &mut results);
+
+    //     tool.print_message();
+    let col_widths: Vec<usize> = PARAM_TITLES.iter().map(|name| max(name.len(), 8)).collect();
+    for col in 0..col_widths.len() {
+        print!("{1:<0$}", col_widths[col], PARAM_TITLES[col]);
+        print!(" ");
+    }
+    println!();
+
+    for (params, results) in param_sets.iter().zip(results) {
+        print!("{1:<0$}", col_widths[0], params.sim_type.name());
+        print!(" ");
+        print!("{1:<0$}", col_widths[1], params.node_ageing);
+        print!(" ");
+        print!("{1:<0$}", col_widths[2], params.targetting);
+        print!(" ");
+        print!("{1:<0$}", col_widths[3], params.num_nodes);
+        print!(" ");
+        print!("{1:<0$}",
+               col_widths[4],
+               params.num_malicious.from_base(params.num_nodes));
+        print!(" ");
+        print!("{1:<0$}", col_widths[5], params.min_group_size);
+        print!(" ");
+        print!("{1:<.*}", col_widths[6] - 2, params.quorum_prop);
+        print!(" ");
+        print!("{1:<.*}", col_widths[7] - 2, results.p_disrupt);
+        print!(" ");
+        print!("{1:<.*}", col_widths[8] - 2, results.p_compromise);
+        println!();
+    }
 }

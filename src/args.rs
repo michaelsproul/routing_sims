@@ -25,10 +25,7 @@ use super::quorum::*;
 use std::str::FromStr;
 use std::fmt::Debug;
 use std::process::exit;
-use std::cmp::max;
-
-use rayon::prelude::*;
-use rayon::par_iter::collect::collect_into;
+use std::ops::AddAssign;
 
 
 const USAGE: &'static str =
@@ -57,12 +54,12 @@ Tools:
 Options:
     -h --help   Show this message
     -n \
-     NUM      Number of nodes, total.
-    -r VAL      Either number of compromised nodes (e.g. \
+     NUM      Number of nodes, total, e.g. 1000-5000:1000.
+    -r RANGE      Either number of compromised nodes (e.g. \
      50) or percentage (default is 10%).
     -k RANGE    Minimum group size, e.g. 10-20.
     -q \
-     RANGE    Quorum size as a percentage with step size, e.g. 50-90:10.
+     RANGE    Quorum size as a proportion with step size, e.g. 0.5-0.7:0.1.
     -s VAL      Maximum \
      number of steps, each the length of one proof-of-work.
     -p VAL      Number of times to \
@@ -73,7 +70,7 @@ Options:
 #[derive(RustcDecodable)]
 struct Args {
     arg_tool: String,
-    flag_n: Option<NN>,
+    flag_n: Option<String>,
     flag_r: Option<String>,
     flag_k: Option<String>,
     flag_q: Option<String>,
@@ -81,9 +78,128 @@ struct Args {
     flag_p: Option<NN>,
 }
 
-pub struct QuorumRange {
-    pub range: (RR, RR),
-    pub step: RR,
+pub trait DefaultStep<T> {
+    fn default_step() -> T;
+}
+
+impl DefaultStep<NN> for NN {
+    fn default_step() -> NN {
+        1
+    }
+}
+
+impl DefaultStep<RR> for RR {
+    fn default_step() -> RR {
+        1.0
+    }
+}
+
+pub enum Iterable<T> {
+    Range(T, T, Option<T>), // start, stop, optional step
+    List(Vec<T>),
+    Number(T),
+}
+
+impl<T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T>> Iterable<T> {
+    fn iter(&self) -> IterableIterator<T> {
+        IterableIterator {
+            iterable: self,
+            i: 0,
+            prev: None,
+        }
+    }
+}
+
+impl<T: FromStr> FromStr for Iterable<T>
+    where <T as FromStr>::Err: Debug
+{
+    type Err = ();  // we just panic!
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.contains('-') {
+            // We have a range; check for a step:
+            let (first, step) = if s.contains(':') {
+                let mut parts = s.split(':');
+                let first = parts.next().expect("split half");
+                let second = parts.next().expect("split half");
+                if parts.next() != None {
+                    panic!("expected 'start-stop:step', found {}", s);
+                }
+                (first, Some(second.parse().expect("parse")))
+            } else {
+                (s, None)
+            };
+            let mut parts = first.split('-');
+            let start = parts.next().expect("split half").parse().expect("parse");
+            let stop = match parts.next() {
+                    Some(part) => part,
+                    None => panic!("expected 'start-stop:step', found {}", s),
+                }
+                .parse()
+                .expect("parse");
+            if parts.next() != None {
+                panic!("expected 'start-stop:step', found {}", s);
+            }
+            Ok(Iterable::Range(start, stop, step))
+        } else if s.contains(',') {
+            // We have a list
+            let parts = s.split(',');
+            Ok(Iterable::List(parts.map(|p| p.parse().expect("parse")).collect()))
+        } else {
+            // Presumably we have a single number
+            Ok(Iterable::Number(s.parse().expect("parse")))
+        }
+    }
+}
+
+struct IterableIterator<'a, T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T> + 'a> {
+    iterable: &'a Iterable<T>,
+    i: usize,
+    prev: Option<T>,
+}
+
+impl<'a, T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T> + 'a> Iterator
+        for IterableIterator<'a, T>
+{
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        let i = self.i;
+        match self.iterable {
+            &Iterable::Range(start, stop, step) => {
+                match self.prev {
+                    None => {
+                        self.prev = Some(start);
+                        self.prev
+                    },
+                    Some(mut x) => {
+                        let step = step.unwrap_or(T::default_step());
+                        x += step;
+                        self.prev = Some(x);
+                        if x > stop {
+                            None
+                        } else {
+                            Some(x)
+                        }
+                    },
+                }
+            },
+            &Iterable::List(ref v) => {
+                if i >= v.len() {
+                    None
+                } else {
+                    self.i = i + 1;
+                    Some(v[i])
+                }
+            },
+            &Iterable::Number(n) => {
+                if i > 0 {
+                    None
+                } else {
+                    self.i = 1;
+                    Some(n)
+                }
+            },
+        }
+    }
 }
 
 pub struct ArgProc {
@@ -91,7 +207,7 @@ pub struct ArgProc {
 }
 
 impl ArgProc {
-    fn read_args() -> ArgProc {
+    pub fn read_args() -> ArgProc {
         let args: Args = Docopt::new(USAGE)
             .and_then(|dopt| dopt.decode())
             .unwrap_or_else(|e| e.exit());
@@ -100,12 +216,18 @@ impl ArgProc {
     }
 
     // TODO: is Vec suitable for this use?
-    fn make_sim_params(&self) -> Vec<SimParams> {
+    pub fn make_sim_params(&self) -> Vec<SimParams> {
         let mut v = Vec::new();
 
-        let group_size_range =
-            self.args.flag_k.as_ref().map(|s| Self::parse_range(&s)).unwrap_or((10, 10));
-        let quorum_range = self.quorum_range();
+        let nodes_range: Iterable<NN> =
+            self.args.flag_n.as_ref().map_or(Iterable::Number(1000), |s| s.parse().expect("parse"));
+        let mut nodes_iter = nodes_range.iter();
+        let group_size_range: Iterable<NN> =
+            self.args.flag_k.as_ref().map_or(Iterable::Number(10), |s| s.parse().expect("parse"));
+        let mut group_size_iter = group_size_range.iter();
+        let quorum_range =
+            self.args.flag_q.as_ref().map_or(Iterable::Number(0.5), |s| s.parse().expect("parse"));
+        let mut quorum_iter = quorum_range.iter();
 
         // Create initial parameter set
         let tool = match self.args.arg_tool.as_str() {
@@ -129,17 +251,27 @@ impl ArgProc {
             sim_type: tool.0,
             node_ageing: tool.1,
             targetting: tool.2,
-            num_nodes: self.args.flag_n.unwrap_or(1000),
+            num_nodes: nodes_iter.next().expect("first iter item"),
             num_malicious: self.num_malicious(),
-            min_group_size: group_size_range.0,
-            quorum_prop: quorum_range.range.0,
+            min_group_size: group_size_iter.next().expect("first iter item"),
+            quorum_prop: quorum_iter.next().expect("first iter item"),
             max_steps: self.args.flag_s.unwrap_or(1000),
             repetitions: self.args.flag_p.unwrap_or(100),
         });
 
+        // Replicate for all network sizes (num nodes)
+        let range = 0..v.len();
+        for n in nodes_iter {
+            for i in range.clone() {
+                let mut s = v[i].clone();
+                s.num_nodes = n;
+                v.push(s);
+            }
+        }
+
         // Replicate for all group sizes
         let range = 0..v.len();
-        for g in (group_size_range.0 + 1)...group_size_range.1 {
+        for g in group_size_iter {
             for i in range.clone() {
                 let mut s = v[i].clone();
                 s.min_group_size = g;
@@ -149,14 +281,12 @@ impl ArgProc {
 
         // Replicate for all quorum sizes
         let range = 0..v.len();
-        let mut q = quorum_range.range.0 + quorum_range.step;
-        while q <= quorum_range.range.1 {
+        for q in quorum_iter {
             for i in range.clone() {
                 let mut s = v[i].clone();
                 s.quorum_prop = q;
                 v.push(s);
             }
-            q += quorum_range.step;
         }
 
         v
@@ -176,49 +306,17 @@ impl ArgProc {
             RelOrAbs::Rel(0.1)
         }
     }
-
-    fn quorum_range(&self) -> QuorumRange {
-        let s: &str = match self.args.flag_q {
-            Some(ref s) => s.as_ref(),
-            None => {
-                // Default: only 50%
-                return QuorumRange {
-                    range: (0.5, 0.5),
-                    step: 1.0,
-                };
-            }
-        };
-        let i = s.find(':').expect("Syntax should be a-b:step");
-        let step = s[i + 1..].parse::<RR>().expect("step in a-b:step should be a valid number");
-        let (a, b): (RR, RR) = Self::parse_range(&s[..i]);
-        // Convert from percentages:
-        QuorumRange {
-            range: (a * 0.01, b * 0.01),
-            step: step * 0.01,
-        }
-    }
-
-    // Group size and quorum have ranges:
-    fn parse_range<T: FromStr>(s: &str) -> (T, T)
-        where T::Err: Debug
-    {
-        const ERR: &'static str = "In a range, syntax should be 'x-y'";
-        let i = s.find('-').expect(ERR);
-        let lb = s[..i].parse::<T>().expect(ERR);
-        let ub = s[i + 1..].parse::<T>().expect(ERR);
-        (lb, ub)
-    }
 }
 
 #[derive(Clone, Copy)]
-enum SimType {
+pub enum SimType {
     DirectCalc,
     Structure,
     FullSim,
 }
 
 impl SimType {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             SimType::DirectCalc => "dir_calc",
             SimType::Structure => "structure",
@@ -228,13 +326,13 @@ impl SimType {
 }
 
 #[derive(Clone, Copy)]
-enum RelOrAbs {
+pub enum RelOrAbs {
     Rel(RR),
     Abs(NN),
 }
 
 impl RelOrAbs {
-    fn from_base(self, base: NN) -> NN {
+    pub fn from_base(self, base: NN) -> NN {
         match self {
             RelOrAbs::Rel(r) => ((base as RR) * r) as NN,
             RelOrAbs::Abs(n) => n,
@@ -242,30 +340,30 @@ impl RelOrAbs {
     }
 }
 
-const PARAM_TITLES: [&'static str; 9] = ["Type",
-                                         "Ageing",
-                                         "Targetting",
-                                         "Nodes",
-                                         "Malicious",
-                                         "MinGroupSize",
-                                         "QuorumProp",
-                                         "P(disruption)",
-                                         "P(compromise)"];
+pub const PARAM_TITLES: [&'static str; 9] = ["Type",
+                                             "Ageing",
+                                             "Targetting",
+                                             "Nodes",
+                                             "Malicious",
+                                             "MinGroup",
+                                             "Quorum",
+                                             "P(disruption)",
+                                             "P(compromise)"];
 #[derive(Clone)]
-struct SimParams {
-    sim_type: SimType,
-    node_ageing: bool,
-    targetting: bool,
-    num_nodes: NN,
-    num_malicious: RelOrAbs,
-    min_group_size: NN,
-    quorum_prop: RR,
-    max_steps: NN,
-    repetitions: NN,
+pub struct SimParams {
+    pub sim_type: SimType,
+    pub node_ageing: bool,
+    pub targetting: bool,
+    pub num_nodes: NN,
+    pub num_malicious: RelOrAbs,
+    pub min_group_size: NN,
+    pub quorum_prop: RR,
+    pub max_steps: NN,
+    pub repetitions: NN,
 }
 
 impl SimParams {
-    fn result(&self) -> SimResult {
+    pub fn result(&self) -> SimResult {
         let args = ToolArgs {
             num_nodes: self.num_nodes,
             num_malicious: self.num_malicious.from_base(self.num_nodes),
@@ -307,49 +405,5 @@ impl SimParams {
         };
 
         tool.calc_p_compromise()
-    }
-}
-
-
-
-pub fn main() {
-    let args = ArgProc::read_args();
-    let param_sets = args.make_sim_params();
-
-    info!("Starting to simulate {} different parameter sets",
-          param_sets.len());
-    let mut results = Vec::new();
-    collect_into(param_sets.par_iter().map(|item| item.result()),
-                 &mut results);
-
-    //     tool.print_message();
-    let col_widths: Vec<usize> = PARAM_TITLES.iter().map(|name| max(name.len(), 10)).collect();
-    for col in 0..col_widths.len() {
-        print!("{1:0$}", col_widths[col], PARAM_TITLES[col]);
-        print!(" ");
-    }
-    println!();
-
-    for (params, results) in param_sets.iter().zip(results) {
-        print!("{1:0$}", col_widths[0], params.sim_type.name());
-        print!(" ");
-        print!("{1:0$}", col_widths[1], params.node_ageing);
-        print!(" ");
-        print!("{1:0$}", col_widths[2], params.targetting);
-        print!(" ");
-        print!("{1:0$}", col_widths[3], params.num_nodes);
-        print!(" ");
-        print!("{1:0$}",
-               col_widths[4],
-               params.num_malicious.from_base(params.num_nodes));
-        print!(" ");
-        print!("{1:0$}", col_widths[5], params.min_group_size);
-        print!(" ");
-        print!("{1:0$}", col_widths[6], params.quorum_prop);
-        print!(" ");
-        print!("{1:0$}", col_widths[7], results.p_disrupt);
-        print!(" ");
-        print!("{1:0$}", col_widths[8], results.p_compromise);
-        println!();
     }
 }
