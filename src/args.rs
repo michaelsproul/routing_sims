@@ -242,14 +242,15 @@ impl RelOrAbs {
     }
 }
 
-const PARAM_TITLES: [&'static str; 8] = ["Type",
+const PARAM_TITLES: [&'static str; 9] = ["Type",
                                          "Ageing",
                                          "Targetting",
                                          "Nodes",
                                          "Malicious",
                                          "MinGroupSize",
                                          "QuorumProp",
-                                         "P(disruption)"];
+                                         "P(disruption)",
+                                         "P(compromise)"];
 #[derive(Clone)]
 struct SimParams {
     sim_type: SimType,
@@ -346,7 +347,9 @@ pub fn main() {
         print!(" ");
         print!("{1:0$}", col_widths[6], params.quorum_prop);
         print!(" ");
-        print!("{1:0$}", col_widths[7], results);
+        print!("{1:0$}", col_widths[7], results.p_disrupt);
+        print!(" ");
+        print!("{1:0$}", col_widths[8], results.p_compromise);
         println!();
     }
 }

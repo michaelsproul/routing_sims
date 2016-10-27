@@ -44,6 +44,11 @@ fn test_choose() {
     assert_eq!(choose(56, 7) as NN, (8 * 11 * 9 * 53 * 13 * 17 * 25));
 }
 
+/// Calculate the probability of less than `q` "black" nodes, where there
+/// are `n` total nodes ("red" + "black"), `r` red, and we choose `k`.
+pub fn prob_disruption(n: NN, r: NN, k: NN, q: NN) -> RR {
+    1.0 - prob_compromise(n, n - r, k, q)
+}
 
 /// Calculate the probability of choosing at least `q` "red" nodes, where there
 /// are `n` total nodes, `r` red, and we choose `k`.
