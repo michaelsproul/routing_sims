@@ -95,15 +95,15 @@ impl DefaultStep<RR> for RR {
     }
 }
 
-pub enum Iterable<T> {
+pub enum SamplePoints<T> {
     Range(T, T, Option<T>), // start, stop, optional step
     List(Vec<T>),
     Number(T),
 }
 
-impl<T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T>> Iterable<T> {
-    fn iter(&self) -> IterableIterator<T> {
-        IterableIterator {
+impl<T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T>> SamplePoints<T> {
+    fn iter(&self) -> SamplePointsIterator<T> {
+        SamplePointsIterator {
             iterable: self,
             i: 0,
             prev: None,
@@ -111,7 +111,7 @@ impl<T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T>> Iterable<T> {
     }
 }
 
-impl<T: FromStr> FromStr for Iterable<T>
+impl<T: FromStr> FromStr for SamplePoints<T>
     where <T as FromStr>::Err: Debug
 {
     type Err = ();  // we just panic!
@@ -140,32 +140,32 @@ impl<T: FromStr> FromStr for Iterable<T>
             if parts.next() != None {
                 panic!("expected 'start-stop:step', found {}", s);
             }
-            Ok(Iterable::Range(start, stop, step))
+            Ok(SamplePoints::Range(start, stop, step))
         } else if s.contains(',') {
             // We have a list
             let parts = s.split(',');
-            Ok(Iterable::List(parts.map(|p| p.parse().expect("parse")).collect()))
+            Ok(SamplePoints::List(parts.map(|p| p.parse().expect("parse")).collect()))
         } else {
             // Presumably we have a single number
-            Ok(Iterable::Number(s.parse().expect("parse")))
+            Ok(SamplePoints::Number(s.parse().expect("parse")))
         }
     }
 }
 
-struct IterableIterator<'a, T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T> + 'a> {
-    iterable: &'a Iterable<T>,
+struct SamplePointsIterator<'a, T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T> + 'a> {
+    iterable: &'a SamplePoints<T>,
     i: usize,
     prev: Option<T>,
 }
 
 impl<'a, T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T> + 'a> Iterator
-        for IterableIterator<'a, T>
+        for SamplePointsIterator<'a, T>
 {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
         let i = self.i;
         match self.iterable {
-            &Iterable::Range(start, stop, step) => {
+            &SamplePoints::Range(start, stop, step) => {
                 match self.prev {
                     None => {
                         self.prev = Some(start);
@@ -183,7 +183,7 @@ impl<'a, T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T> + 'a> Iter
                     },
                 }
             },
-            &Iterable::List(ref v) => {
+            &SamplePoints::List(ref v) => {
                 if i >= v.len() {
                     None
                 } else {
@@ -191,7 +191,7 @@ impl<'a, T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T> + 'a> Iter
                     Some(v[i])
                 }
             },
-            &Iterable::Number(n) => {
+            &SamplePoints::Number(n) => {
                 if i > 0 {
                     None
                 } else {
@@ -220,21 +220,27 @@ impl ArgProc {
     pub fn make_sim_params(&self) -> Vec<SimParams> {
         let mut v = Vec::new();
 
-        let nodes_range: Iterable<NN> =
-            self.args.flag_n.as_ref().map_or(Iterable::Number(1000), |s| s.parse().expect("parse"));
+        let nodes_range: SamplePoints<NN> = self.args
+            .flag_n
+            .as_ref()
+            .map_or(SamplePoints::Number(1000), |s| s.parse().expect("parse"));
         let mut nodes_iter = nodes_range.iter();
 
-        let mal_nodes_range: Iterable<RelOrAbs> =
-            self.args.flag_r.as_ref().map_or(Iterable::Number(RelOrAbs::Rel(0.1)),
+        let mal_nodes_range: SamplePoints<RelOrAbs> =
+            self.args.flag_r.as_ref().map_or(SamplePoints::Number(RelOrAbs::Rel(0.1)),
                                              |s| s.parse().expect("parse"));
         let mut mal_nodes_iter = mal_nodes_range.iter();
 
-        let group_size_range: Iterable<NN> =
-            self.args.flag_k.as_ref().map_or(Iterable::Number(10), |s| s.parse().expect("parse"));
+        let group_size_range: SamplePoints<NN> = self.args
+            .flag_k
+            .as_ref()
+            .map_or(SamplePoints::Number(10), |s| s.parse().expect("parse"));
         let mut group_size_iter = group_size_range.iter();
 
-        let quorum_range =
-            self.args.flag_q.as_ref().map_or(Iterable::Number(0.5), |s| s.parse().expect("parse"));
+        let quorum_range = self.args
+            .flag_q
+            .as_ref()
+            .map_or(SamplePoints::Number(0.5), |s| s.parse().expect("parse"));
         let mut quorum_iter = quorum_range.iter();
 
         let q_use_age = match self.args.flag_Q.as_ref().map(|s| s.as_str()) {
