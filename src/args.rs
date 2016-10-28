@@ -28,8 +28,8 @@ use std::ops::AddAssign;
 use std::cmp::Ordering;
 
 
-const USAGE: &'static str =
-    "
+#[cfg_attr(rustfmt, rustfmt_skip)]
+const USAGE: &'static str = "
 Probability computation tool.
 
 Usage:
@@ -42,32 +42,21 @@ Usage:
      [-r RANGE] [-k RANGE] [-q RANGE] [-s VAL] [-p VAL] [-Q QTYPE] [-T TTYPE]
 
 Tools:
-    calc        \
-     Direct calculation: all groups have min size, no ageing or targetting
-    structure   \
-     Simulate group structure, but no ageing or targetting
-    full        Full simulation (see \
-     -Q and -T parameters)
+    calc        Direct calculation: all groups have min size, no ageing or targetting
+    structure   Simulate group structure, but no ageing or targetting
+    full        Full simulation (see -Q and -T parameters)
 
 Options:
     -h --help   Show this message
-    -n RANGE    Number of \
-     nodes, total, e.g. 1000-5000:1000.
-    -r RANGE    Either number of compromised nodes (e.g. \
-     50) or percentage (default is 10%).
+    -n RANGE    Number of nodes, total, e.g. 1000-5000:1000.
+    -r RANGE    Either number of compromised nodes (e.g. 50) or percentage (default is 10%).
     -k RANGE    Minimum group size, e.g. 10-20.
-    -q \
-     RANGE    Quorum size as a proportion with step size, e.g. 0.5-0.7:0.1.
-    -s VAL      \
-     Maximum number of steps, each the length of one proof-of-work.
-    -p VAL      Number of \
-     times to 
-     repeat a true/false simulation to calculate
-                an attack success \
-     probability.
+    -q RANGE    Quorum size as a proportion with step size, e.g. 0.5-0.7:0.1.
+    -s VAL      Maximum number of steps, each the length of one proof-of-work.
+    -p VAL      Number of times to repeat a true/false simulation to calculate
+                an attack success probability.
     -Q QTYPE    Quorum algorithm: simple, age or all
-    -T TTYPE    Attack \
-     targetting strategy: none, simple or all
+    -T TTYPE    Attack targetting strategy: none, simple or all
 ";
 
 #[allow(non_snake_case)]
@@ -371,6 +360,7 @@ impl SimType {
 }
 
 #[derive(Clone, Copy)]
+
 pub enum AttackType {
     Untargetted,
     SimpleTargetted,
