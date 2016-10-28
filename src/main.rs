@@ -25,6 +25,7 @@ extern crate docopt;
 #[macro_use]
 extern crate log;
 extern crate env_logger;
+extern crate rayon;
 
 mod prob;
 mod sim;
@@ -32,13 +33,14 @@ mod args;
 mod quorum;
 mod tools;
 
-use std::process::exit;
 use std::result;
 use std::fmt::{self, Formatter};
+use std::cmp::max;
 
-use tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool};
-use args::QuorumRange;
-use quorum::*;
+use rayon::prelude::*;
+use rayon::par_iter::collect::collect_into;
+
+use args::{ArgProc, PARAM_TITLES};
 
 
 // We could use templating but there's no reason not to do the easy thing and
@@ -71,126 +73,59 @@ pub struct ToolArgs {
     num_nodes: NN,
     num_malicious: NN,
     min_group_size: NN,
+    quorum_prop: RR,
     any_group: bool,
-    verbose: bool,
     max_steps: NN,
     repetitions: NN,
 }
 
 impl ToolArgs {
-    fn new() -> Self {
-        ToolArgs {
-            num_nodes: 5000,
-            num_malicious: 500,
-            min_group_size: 10,
-            any_group: false,
-            verbose: false,
-            max_steps: 10000,
-            repetitions: 100,
-        }
-    }
-
-    fn total_nodes(&self) -> NN {
-        self.num_nodes
-    }
-
-    fn set_total_nodes(&mut self, n: NN) {
-        self.num_nodes = n;
-    }
-
-    fn malicious_nodes(&self) -> NN {
-        self.num_malicious
-    }
-
-    fn min_group_size(&self) -> NN {
-        self.min_group_size
-    }
-
-    fn set_min_group_size(&mut self, n: NN) {
-        self.min_group_size = n;
-    }
-
-    fn any_group(&self) -> bool {
-        self.any_group
-    }
-
-    fn set_any_group(&mut self, any: bool) {
-        self.any_group = any;
-    }
-
-    fn verbose(&self) -> bool {
-        self.verbose
-    }
-
-    fn set_verbose(&mut self, v: bool) {
-        self.verbose = v;
-    }
-
     fn check_invariant(&self) {
         assert!(self.num_nodes >= self.num_malicious);
+        assert!(self.quorum_prop >= 0.0 && self.quorum_prop <= 1.0);
     }
 }
 
 
 fn main() {
     env_logger::init().unwrap();
-    let args = args::ArgProc::read_args();
-    let mut tool: Box<Tool> = match args.tool() {
-        "calc" | "simple" => Box::new(DirectCalcTool::new()),
-        "structure" => Box::new(SimStructureTool::new()),
-        "age_simple" => Box::new(FullSimTool::new(SimpleQuorum::new(), UntargettedAttack {})),
-        "age_quorum" => Box::new(FullSimTool::new(AgeQuorum::new(), UntargettedAttack {})),
-        "targetted_age_simple" => Box::new(FullSimTool::new(SimpleQuorum::new(), SimpleTargettedAttack::new())),
-        "targetted_age_quorum" => Box::new(FullSimTool::new(AgeQuorum::new(), SimpleTargettedAttack::new())),
-        other => {
-            if other.trim().len() == 0 {
-                println!("No tool specified!");
-            } else {
-                println!("Tool not recognised: {}", other);
-            }
-            println!("Run with --help for a list of tools.");
-            exit(1);
-        }
-    };
-    args.apply(tool.args_mut());
-    let group_size_range = args.group_size_range().unwrap_or((8, 10));
-    let quorum_range = match args.quorum_size_range() {
-        Some(r) => r,
-        None => {
-            QuorumRange {
-                range: (0.5, 0.9),
-                step: 0.2,
-            }
-        }
-    };
 
-    tool.print_message();
-    println!("Total nodes n = {}", tool.args_mut().total_nodes());
-    println!("Compromised nodes r = {}",
-             tool.args_mut().malicious_nodes());
-    println!("Min group size k on horizontal axis (cols)");
-    println!("Quorom size (proportion) q on vertical axis (rows)");
+    let param_sets = ArgProc::read_args().make_sim_params();
 
-    const W0: usize = 3;      // width first column
-    const W1: usize = 24;     // width other columns
+    info!("Starting to simulate {} different parameter sets",
+          param_sets.len());
+    let mut results = Vec::new();
+    collect_into(param_sets.par_iter().map(|item| item.result()),
+                 &mut results);
 
-    // header:
-    print!("{1:0$}", W0 + 2, "");
-    for group_size in group_size_range.0...group_size_range.1 {
-        print!("{1:0$}", W1, group_size);
+    //     tool.print_message();
+    let col_widths: Vec<usize> = PARAM_TITLES.iter().map(|name| max(name.len(), 8)).collect();
+    for col in 0..col_widths.len() {
+        print!("{1:<0$}", col_widths[col], PARAM_TITLES[col]);
+        print!(" ");
     }
-    println!("");
-    // rest:
-    let mut quorum_size = quorum_range.range.0;
-    while quorum_size <= quorum_range.range.1 {
-        print!("{1:.0$}", W0, quorum_size);
-        tool.quorum_mut().set_quorum_proportion(quorum_size);
-        for group_size in group_size_range.0...group_size_range.1 {
-            tool.args_mut().set_min_group_size(group_size);
-            let p = tool.calc_p_compromise();
-            print!("{1:0$.e}", W1, p);
-        }
-        println!("");
-        quorum_size += quorum_range.step;
+    println!();
+
+    for (params, results) in param_sets.iter().zip(results) {
+        print!("{1:<0$}", col_widths[0], params.sim_type.name());
+        print!(" ");
+        print!("{1:<0$}", col_widths[1], params.age_quorum);
+        print!(" ");
+        print!("{1:<0$}", col_widths[2], params.targetting.name());
+        print!(" ");
+        print!("{1:<0$}", col_widths[3], params.num_nodes);
+        print!(" ");
+        print!("{1:<0$}",
+               col_widths[4],
+               params.num_malicious.from_base(params.num_nodes));
+        print!(" ");
+        print!("{1:<0$}", col_widths[5], params.min_group_size);
+        print!(" ");
+        print!("{1:<.*}", col_widths[6] - 2, params.quorum_prop);
+        print!(" ");
+        print!("{1:<.*}", col_widths[7] - 2, results.p_disrupt);
+        print!(" ");
+        print!("{1:<.*}", col_widths[8] - 2, results.p_compromise);
+        println!();
     }
 }

@@ -20,26 +20,25 @@
 
 use super::{NN, RR, ToolArgs, Error};
 use super::quorum::{Quorum, SimpleQuorum, AttackStrategy, UntargettedAttack};
-use super::prob::prob_compromise;
+use super::prob::{prob_disruption, prob_compromise};
 use super::sim::{Network, new_node_name, NodeData, NoAddRestriction, RestrictOnePerAge};
 
-use std::io::{Write, stderr};
 use std::iter;
 use std::collections::VecDeque;
 
 
+pub struct SimResult {
+    pub p_disrupt: RR,
+    pub p_compromise: RR,
+}
+
+
 pub trait Tool {
-    /// Get the wrapped arguments struct
-    fn args_mut(&mut self) -> &mut ToolArgs;
-
-    /// Adjust the quorum
-    fn quorum_mut(&mut self) -> &mut Quorum;
-
     /// Print a message about the computation (does not include parameters).
     fn print_message(&self);
 
     /// Calculate the probability of compromise (range: 0 to 1).
-    fn calc_p_compromise(&self) -> RR;
+    fn calc_p_compromise(&self) -> SimResult;
 }
 
 
@@ -51,54 +50,53 @@ pub struct DirectCalcTool {
 }
 
 impl DirectCalcTool {
-    pub fn new() -> Self {
+    pub fn new(args: ToolArgs) -> Self {
+        let quorum = SimpleQuorum::from(args.quorum_prop);
         DirectCalcTool {
-            args: ToolArgs::new(),
-            quorum: SimpleQuorum::new(),
+            args: args,
+            quorum: quorum,
         }
     }
 }
 
 impl Tool for DirectCalcTool {
-    fn args_mut(&mut self) -> &mut ToolArgs {
-        &mut self.args
-    }
-
-    fn quorum_mut(&mut self) -> &mut Quorum {
-        &mut self.quorum
-    }
-
     fn print_message(&self) {
         println!("Tool: calculate probability of compromise, assuming all groups have minimum \
                   size");
-        if self.args.any_group() {
+        let any_group = true;   // only support this now
+        if any_group {
             println!("Output: the probability that at least one group is compromised");
         } else {
             println!("Output: chance of a randomly selected group being compromised");
         }
     }
 
-    fn calc_p_compromise(&self) -> RR {
-        let k = self.args.min_group_size();
+    fn calc_p_compromise(&self) -> SimResult {
+        let k = self.args.min_group_size;
         let q = self.quorum.quorum_size(k).expect("simple quorum size");
-        let p = prob_compromise(self.args.total_nodes(), self.args.malicious_nodes(), k, q);
+        let pd = prob_disruption(self.args.num_nodes, self.args.num_malicious, k, q);
+        let pc = prob_compromise(self.args.num_nodes, self.args.num_malicious, k, q);
 
-        if self.args.verbose() {
-            writeln!(stderr(),
-                     "n: {}, r: {}, k: {}, q: {}, P(single group) = {:.e}",
-                     self.args.total_nodes(),
-                     self.args.malicious_nodes(),
-                     k,
-                     q,
-                     p)
-                .expect("writing to stderr to work");
-        }
+        trace!("n: {}, r: {}, k: {}, q: {}, pd: {:.e}, pc: {:.e}",
+               self.args.num_nodes,
+               self.args.num_malicious,
+               k,
+               q,
+               pd,
+               pc);
 
-        if self.args.any_group() {
-            let n_groups = (self.args.total_nodes() as RR) / (self.args.min_group_size() as RR);
-            1.0 - (1.0 - p).powf(n_groups)
+        let any_group = true;   // only support this now
+        if any_group {
+            let n_groups = (self.args.num_nodes as RR) / (self.args.min_group_size as RR);
+            SimResult {
+                p_disrupt: 1.0 - (1.0 - pd).powf(n_groups),
+                p_compromise: 1.0 - (1.0 - pc).powf(n_groups),
+            }
         } else {
-            p
+            SimResult {
+                p_disrupt: pd,
+                p_compromise: pc,
+            }
         }
     }
 }
@@ -116,40 +114,34 @@ pub struct SimStructureTool {
 }
 
 impl SimStructureTool {
-    pub fn new() -> Self {
+    pub fn new(args: ToolArgs) -> Self {
+        let quorum = SimpleQuorum::from(args.quorum_prop);
         SimStructureTool {
-            args: ToolArgs::new(),
-            quorum: SimpleQuorum::new(),
+            args: args,
+            quorum: quorum,
         }
     }
 }
 
 impl Tool for SimStructureTool {
-    fn args_mut(&mut self) -> &mut ToolArgs {
-        &mut self.args
-    }
-
-    fn quorum_mut(&mut self) -> &mut Quorum {
-        &mut self.quorum
-    }
-
     fn print_message(&self) {
         println!("Tool: simulate allocation of nodes to groups; each has size at least the \
                   specified minimum size");
-        if self.args.any_group() {
+        let any_group = true;   // only support this now
+        if any_group {
             println!("Output: the probability that at least one group is compromised");
         } else {
             println!("Output: chance of a randomly selected group being compromised");
         }
     }
 
-    fn calc_p_compromise(&self) -> RR {
+    fn calc_p_compromise(&self) -> SimResult {
         // We need an "attack" strategy, though we only support one here
         let mut attack = UntargettedAttack {};
-        
+
         // Create a network
-        let mut net = Network::<NoAddRestriction>::new(self.args.min_group_size() as usize);
-        let mut remaining = self.args.total_nodes();
+        let mut net = Network::<NoAddRestriction>::new(self.args.min_group_size as usize);
+        let mut remaining = self.args.num_nodes;
         while remaining > 0 {
             let name = new_node_name();
             match net.add_node(name, NodeData::new()) {
@@ -166,19 +158,26 @@ impl Tool for SimStructureTool {
             };
         }
 
-        if self.args.any_group() {
+        let any_group = true;   // only support this now
+        if any_group {
             // This isn't quite right, since one group not compromised does
             // tell you _something_ about the distribution of malicious nodes,
             // thus probabilities are not indepedent. But unless there are a lot
             // of malicious nodes it should be close.
+            let mut p_no_disruption = 1.0;
             let mut p_no_compromise = 1.0;
             for (_, group) in net.groups() {
                 let k = group.len() as NN;
                 let q = self.quorum.quorum_size(k).expect("simple quorum size");
-                let p = prob_compromise(self.args.total_nodes(), self.args.malicious_nodes(), k, q);
-                p_no_compromise *= 1.0 - p;
+                let pd = prob_disruption(self.args.num_nodes, self.args.num_malicious, k, q);
+                let pc = prob_compromise(self.args.num_nodes, self.args.num_malicious, k, q);
+                p_no_disruption *= 1.0 - pd;
+                p_no_compromise *= 1.0 - pc;
             }
-            1.0 - p_no_compromise
+            SimResult {
+                p_disrupt: 1.0 - p_no_disruption,
+                p_compromise: 1.0 - p_no_compromise,
+            }
         } else {
             // Calculate probability of compromise of one selected group.
 
@@ -191,20 +190,21 @@ impl Tool for SimStructureTool {
             let q = self.quorum.quorum_size(k).expect("simple quorum size");
 
             // We already have code to do the rest:
-            let p = prob_compromise(self.args.total_nodes(), self.args.malicious_nodes(), k, q);
+            let pd = prob_disruption(self.args.num_nodes, self.args.num_malicious, k, q);
+            let pc = prob_compromise(self.args.num_nodes, self.args.num_malicious, k, q);
 
-            if self.args.verbose() {
-                writeln!(stderr(),
-                         "n: {}, r: {}, k: {}, q: {}, P(single group) = {:.e}",
-                         self.args.total_nodes(),
-                         self.args.malicious_nodes(),
-                         k,
-                         q,
-                         p)
-                    .expect("writing to stderr to work");
+            trace!("n: {}, r: {}, k: {}, q: {}, pd: {:.e}, pc: {:.e}",
+                   self.args.num_nodes,
+                   self.args.num_malicious,
+                   k,
+                   q,
+                   pd,
+                   pc);
+
+            SimResult {
+                p_disrupt: pd,
+                p_compromise: pc,
             }
-
-            p
         }
     }
 }
@@ -213,26 +213,27 @@ impl Tool for SimStructureTool {
 /// A tool which simulates group operations.
 ///
 /// Can relocate nodes according to the node ageing RFC (roughly).
-pub struct FullSimTool<Q: Quorum, A: AttackStrategy+Clone> {
+pub struct FullSimTool<Q: Quorum, A: AttackStrategy + Clone> {
     args: ToolArgs,
     quorum: Q,
     attack: A,
 }
 
-impl<Q: Quorum, A: AttackStrategy+Clone> FullSimTool<Q, A> {
-    pub fn new(quorum: Q, strategy: A) -> Self {
+impl<Q: Quorum, A: AttackStrategy + Clone> FullSimTool<Q, A> {
+    pub fn new(args: ToolArgs, mut quorum: Q, strategy: A) -> Self {
+        quorum.set_quorum_proportion(args.quorum_prop);
         FullSimTool {
-            args: ToolArgs::new(),
+            args: args,
             quorum: quorum,
             attack: strategy,
         }
     }
 
-    // Run a simulation. Return true if a compromise occurred. Only supports
-    // "any group" mode.
-    fn run_sim(&self) -> bool {
+    // Run a simulation. Result is a pair of booleans, `(any_disruption, any_compromise)`.
+    fn run_sim(&self) -> (bool, bool) {
         info!("Starting sim");
         assert!(self.args.any_group);
+        let mut disruption = false;
         let mut attack = self.attack.clone();
 
         // 1. Create initial network.
@@ -240,8 +241,8 @@ impl<Q: Quorum, A: AttackStrategy+Clone> FullSimTool<Q, A> {
         // (these do not affect the network and would simply be re-added later).
         // Because of this and the assumption that all these nodes are "good",
         // we do not need to simulate proof-of-work here.
-        let mut net = Network::<RestrictOnePerAge>::new(self.args.min_group_size() as usize);
-        let num_initial = self.args.total_nodes() - self.args.malicious_nodes();
+        let mut net = Network::<RestrictOnePerAge>::new(self.args.min_group_size as usize);
+        let num_initial = self.args.num_nodes - self.args.num_malicious;
         // Pre-generate all nodes to be added, in a Vec.
         // We can pop from this and on relocation push.
         let mut to_add: Vec<_> = iter::repeat(0)
@@ -311,7 +312,7 @@ impl<Q: Quorum, A: AttackStrategy+Clone> FullSimTool<Q, A> {
         // Assumption: if a node has done proof-of-work but its original target group splits, it
         // simply joins whichever group it would now be in. If a node has done proof of work and
         // is not accepted due to age restrictions, it is given a new name and must redo work.
-        let mut n_new_malicious = self.args.malicious_nodes();
+        let mut n_new_malicious = self.args.num_malicious;
         // Queue of nodes doing proof-of-work. Push to back, pop from front.
         let mut waiting = VecDeque::new();
         for _ in 0..self.args.max_steps {
@@ -355,42 +356,49 @@ impl<Q: Quorum, A: AttackStrategy+Clone> FullSimTool<Q, A> {
                 }
             }
 
-            // Finally, we check if a compromise-of-quorum occurred.
+            // Finally, we check if disruption or compromise occurred:
             for (_, ref group) in net.groups() {
-                if self.quorum.quorum_disrupted(group) {
-                    return true;
+                if self.quorum.quorum_compromised(group) {
+                    // Compromise implies disruption!
+                    return (true, true);
+                } else if self.quorum.quorum_disrupted(group) {
+                    disruption = true;
                 }
             }
         }
 
-        // If we didn't return already, no compromise occurred
-        false
+        // If we didn't return already, no compromise occurred, but disruption may have
+        (disruption, false)
     }
 }
 
-impl<Q: Quorum, A: AttackStrategy+Clone> Tool for FullSimTool<Q, A> {
-    fn args_mut(&mut self) -> &mut ToolArgs {
-        &mut self.args
-    }
-
-    fn quorum_mut(&mut self) -> &mut Quorum {
-        &mut self.quorum
-    }
-
+impl<Q: Quorum, A: AttackStrategy + Clone> Tool for FullSimTool<Q, A> {
     fn print_message(&self) {
         println!("Tool: simulate group operations");
-        if self.args.any_group() {
+        let any_group = true;   // only support this now
+        if any_group {
             println!("Output: the probability that at least one group is compromised");
         } else {
             println!("Output: chance of a randomly selected group being compromised");
         }
     }
 
-    fn calc_p_compromise(&self) -> RR {
-        let compromises = iter::repeat(0)
-            .take(self.args.repetitions as usize)
-            .filter(|_| self.run_sim())
-            .count() as RR;
-        compromises / (self.args.repetitions as RR)
+    fn calc_p_compromise(&self) -> SimResult {
+        let mut n_disruptions = 0;
+        let mut n_compromises = 0;
+        for _ in 0..self.args.repetitions {
+            let r = self.run_sim();
+            if r.0 {
+                n_disruptions += 1;
+            }
+            if r.1 {
+                n_compromises += 1;
+            }
+        }
+        let denom = self.args.repetitions as RR;
+        SimResult {
+            p_disrupt: (n_disruptions as RR) / denom,
+            p_compromise: (n_compromises as RR) / denom,
+        }
     }
 }

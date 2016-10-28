@@ -37,6 +37,9 @@ pub trait Quorum {
 
     /// Returns true if there is not a quorum of good nodes in the passed group.
     fn quorum_disrupted(&self, group: &HashMap<NodeName, NodeData>) -> bool;
+
+    /// Returns true if there is a quorum of bad nodes in the passed group.
+    fn quorum_compromised(&self, group: &HashMap<NodeName, NodeData>) -> bool;
 }
 
 /// Quorum based on simply meeting some minimum proportion of the group.
@@ -48,6 +51,11 @@ impl SimpleQuorum {
     /// New structure. Default to requiring a quorum of the entire group.
     pub fn new() -> Self {
         SimpleQuorum { proportion: 1.0 }
+    }
+
+    /// New structure, with specified proportion requried.
+    pub fn from(prop: RR) -> Self {
+        SimpleQuorum { proportion: prop }
     }
 }
 
@@ -64,6 +72,12 @@ impl Quorum for SimpleQuorum {
         let good = group.iter().filter(|node| !node.1.is_malicious()).count() as RR;
         let all = group.len() as RR;
         good / all < self.proportion
+    }
+
+    fn quorum_compromised(&self, group: &HashMap<NodeName, NodeData>) -> bool {
+        let bad = group.iter().filter(|node| node.1.is_malicious()).count() as RR;
+        let all = group.len() as RR;
+        bad / all >= self.proportion
     }
 }
 
@@ -103,8 +117,24 @@ impl Quorum for AgeQuorum {
                 good_age += data.age();
             }
         }
-        (n_good as RR) / n_nodes < self.proportion &&
+        (n_good as RR) / n_nodes < self.proportion ||
         (good_age as RR) / (sum_age as RR) < self.proportion
+    }
+
+    fn quorum_compromised(&self, group: &HashMap<NodeName, NodeData>) -> bool {
+        let n_nodes = group.len() as RR;
+        let mut sum_age = 0;
+        let mut n_bad = 0;
+        let mut bad_age = 0;
+        for data in group.values() {
+            sum_age += data.age();
+            if data.is_malicious() {
+                n_bad += 1;
+                bad_age += data.age();
+            }
+        }
+        (n_bad as RR) / n_nodes >= self.proportion &&
+        (bad_age as RR) / (sum_age as RR) >= self.proportion
     }
 }
 
