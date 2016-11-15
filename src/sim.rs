@@ -26,7 +26,7 @@
 // For now, because lots of stuff isn't implemented yet:
 #![allow(dead_code)]
 
-use super::{NN, Error, Result};
+use super::{NN, RR, Error, Result};
 use super::quorum::AttackStrategy;
 
 use std::cmp::{Ordering, min};
@@ -357,6 +357,49 @@ impl<AR: AddRestriction> Network<AR> {
             }
         };
         Ok(prefix)
+    }
+    
+    /// Probabilistically drop nodes (`p` is the chance of each node being dropped).
+    /// Return the number of nodes dropped.
+    pub fn probabilistic_drop(&mut self, p: RR) -> usize {
+        let thresh = (p * (NN::max_value() as RR)).round() as NN;
+        let mut need_merge = vec![];
+        let mut num = 0;
+        for (prefix, ref mut group) in &mut self.groups {
+            let to_remove: Vec<_> = group.keys().filter(|_| sample_NN() < thresh).cloned().collect();
+            for key in to_remove {
+                group.remove(&key);
+                num += 1;
+            }
+            if group.len() < self.min_group_size {
+                need_merge.push(*prefix);
+            }
+        }
+        
+        // Do any merges needed (after all removals)
+        while let Some(prefix) = need_merge.pop() {
+            if prefix.bit_count == 0 {
+                // Not enough members in network yet; nothing we can do
+                continue;
+            }
+            let mut group = match self.groups.remove(&prefix) {
+                Some(g) => g,
+                None => {
+                    // we marked it twice and handled it already?
+                    continue;
+                }
+            };
+            let parent = prefix.popped();
+            // Groups are disjoint, so all "compatibles" should be descendents of the new "parent"
+            let compatible_prefixes: Vec<_> = self.groups.keys().filter(|k| k.is_compatible(parent)).cloned().collect();
+            for p in compatible_prefixes {
+                let other_group = self.groups.remove(&p).expect("has group");
+                group.extend(other_group);
+            }
+            self.groups.insert(parent, group);
+        }
+        
+        num
     }
 
     /// Check need_split and if true call do_split. Return the prefix matching

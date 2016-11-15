@@ -141,21 +141,42 @@ impl Tool for SimStructureTool {
 
         // Create a network
         let mut net = Network::<NoAddRestriction>::new(self.args.min_group_size as usize);
-        let mut remaining = self.args.num_nodes;
-        while remaining > 0 {
-            let name = new_node_name();
-            match net.add_node(name, NodeData::new()) {
-                Ok(prefix) => {
-                    remaining -= 1;
-                    let _prefix = net.maybe_split(prefix, name, &mut attack);
-                }
-                Err(Error::AlreadyExists) => {
-                    continue;
-                }
-                Err(e) => {
-                    panic!("Error adding node: {}", e);
+        // Number of nodes to join/leave each step (can be fractional)
+        let mut to_join = 0.0;
+        let mut to_leave = 0.0;
+        // Network size and target size
+        let mut net_size = 0;
+        let target_size = self.args.num_nodes;
+        'outer: loop {
+            to_join += self.args.join_good;
+            to_leave += self.args.leave_good;
+            
+            while to_join >= 1.0 {
+                to_join -= 1.0;
+                let name = new_node_name();
+                match net.add_node(name, NodeData::new()) {
+                    Ok(prefix) => {
+                        let _prefix = net.maybe_split(prefix, name, &mut attack);
+                        net_size += 1;
+                        if net_size >= target_size {
+                            break 'outer;
+                        }
+                    }
+                    Err(Error::AlreadyExists) => {
+                        continue;
+                    }
+                    Err(e) => {
+                        panic!("Error adding node: {}", e);
+                    }
                 }
             };
+            
+            // only do anything if we expect at least one node to leave
+            if to_leave >= 1.0 {
+                let p_leave = to_leave / (net_size as RR);
+                net_size -= net.probabilistic_drop(p_leave) as NN;
+                to_leave = 0.0;
+            }
         }
 
         let any_group = true;   // only support this now
@@ -232,11 +253,11 @@ impl<Q: Quorum, A: AttackStrategy + Clone> FullSimTool<Q, A> {
     // Run a simulation. Result is a pair of booleans, `(any_disruption, any_compromise)`.
     fn run_sim(&self) -> (bool, bool) {
         info!("Starting sim");
-        assert!(self.args.any_group);
         let mut disruption = false;
         let mut attack = self.attack.clone();
 
         // 1. Create initial network.
+        //TODO: use join_rate and leave_rate as in SimStructureTool
         // For simplicity, we ignore all add-attempts which fail due to age restrictions
         // (these do not affect the network and would simply be re-added later).
         // Because of this and the assumption that all these nodes are "good",
@@ -290,6 +311,7 @@ impl<Q: Quorum, A: AttackStrategy + Clone> FullSimTool<Q, A> {
               n_rejects);
 
         // 2. Start attack
+        // TODO: use join rate (both good and bad nodes), leave rate and limit resets
         // Assumption: all nodes in the network (malicious or not) have the same performance.
         // Proof-of-work time-outs can be used to filter out any nodes with slow CPU/network.
         // We use a step, which is how long proof-of-work takes. We don't set a value here, but

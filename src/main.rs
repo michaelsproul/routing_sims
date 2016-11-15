@@ -39,7 +39,7 @@ use std::cmp::max;
 use rayon::prelude::*;
 use rayon::par_iter::collect::collect_into;
 
-use args::{ArgProc, PARAM_TITLES};
+use args::{ArgProc, SimParams, PARAM_TITLES};
 
 
 // We could use templating but there's no reason not to do the easy thing and
@@ -71,17 +71,50 @@ impl fmt::Display for Error {
 pub struct ToolArgs {
     num_nodes: NN,
     num_malicious: NN,
+    join_good: RR,
+    join_bad: RR,
+    leave_good: RR,
     min_group_size: NN,
     quorum_prop: RR,
-    any_group: bool,
     max_steps: NN,
     repetitions: NN,
 }
 
 impl ToolArgs {
-    fn check_invariant(&self) {
-        assert!(self.num_nodes >= self.num_malicious);
-        assert!(self.quorum_prop >= 0.0 && self.quorum_prop <= 1.0);
+    pub fn from_params(params: &SimParams) -> Self {
+        let nn = params.num_nodes;
+        let nm = params.num_malicious.from_base(nn as RR);
+        assert!(nn >= nm);
+
+        // Step length in days:
+        let step_len = params.proof_time;
+
+        assert!(params.quorum_prop >= 0.0 && params.quorum_prop <= 1.0);
+
+        let join_good = params.join_good.from_base(nn as RR) / step_len;
+        let leave_good = params.leave_good.from_base(nn as RR) / step_len;
+        assert!(join_good > leave_good);
+        if (nn as RR) / (join_good - leave_good) > 1000.0 {
+            warn!("Join rate ({} nodes/step) - leave rate ({} nodes/step) requires many steps \
+                   for init (estimate: {})",
+                   join_good, leave_good,
+                  ((nn as RR) / (join_good - leave_good)).round() as NN);
+        }
+        if leave_good > 0.0 {
+            warn!("Leave rate ({} nodes/step) > 0: this might leave groups too small since we don't simulate merging", leave_good);
+        }
+
+        ToolArgs {
+            num_nodes: nn,
+            num_malicious: nm,
+            join_good: join_good,
+            join_bad: params.join_bad.from_base(nm as RR) / step_len,
+            leave_good: leave_good,
+            min_group_size: params.min_group_size,
+            quorum_prop: params.quorum_prop,
+            max_steps: (params.max_days / step_len).round() as NN,
+            repetitions: params.repetitions,
+        }
     }
 }
 
@@ -90,6 +123,7 @@ fn main() {
     env_logger::init().unwrap();
 
     let param_sets = ArgProc::make_sim_params();
+    // TODO: print number of sims and/or progress
 
     info!("Starting to simulate {} different parameter sets",
           param_sets.len());
@@ -116,7 +150,7 @@ fn main() {
         print!(" ");
         print!("{1:<0$}",
                col_widths[4],
-               params.num_malicious.from_base(params.num_nodes));
+               params.num_malicious.from_base(params.num_nodes as RR));
         print!(" ");
         print!("{1:<0$}", col_widths[5], params.min_group_size);
         print!(" ");
