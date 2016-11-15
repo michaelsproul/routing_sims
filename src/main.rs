@@ -17,8 +17,6 @@
 
 // Calculations to do with security of routing system
 
-#![feature(inclusive_range_syntax)]
-
 extern crate rand;
 extern crate rustc_serialize;
 extern crate docopt;
@@ -104,7 +102,7 @@ fn main() {
         print!("{1:<0$}", col_widths[col], PARAM_TITLES[col]);
         print!(" ");
     }
-    println!();
+    println!("");
 
     for (params, results) in param_sets.iter().zip(results) {
         print!("{1:<0$}", col_widths[0], params.sim_type.name());
@@ -126,6 +124,6 @@ fn main() {
         print!("{1:<.*}", col_widths[7] - 2, results.p_disrupt);
         print!(" ");
         print!("{1:<.*}", col_widths[8] - 2, results.p_compromise);
-        println!();
+        println!("");
     }
 }
