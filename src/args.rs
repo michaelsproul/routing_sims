@@ -17,7 +17,6 @@
 
 //! Argument processing
 
-use docopt::Docopt;
 use super::{ToolArgs, NN, RR};
 use super::tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool, SimResult};
 use super::quorum::*;
@@ -27,53 +26,6 @@ use std::fmt::Debug;
 use std::ops::AddAssign;
 use std::cmp::Ordering;
 
-
-#[cfg_attr(rustfmt, rustfmt_skip)]
-const USAGE: &'static str = "
-Probability computation tool.
-
-Usage:
-    routing-sims [-h | --help]
-    routing-sims calc \
-     [-n RANGE] [-r RANGE] [-k RANGE] [-q RANGE] [-s VAL] [-p VAL]
-    routing-sims structure [-n \
-     RANGE] [-r RANGE] [-k RANGE] [-q RANGE] [-s VAL] [-p VAL]
-    routing-sims full [-n RANGE] \
-     [-r RANGE] [-k RANGE] [-q RANGE] [-s VAL] [-p VAL] [-Q QTYPE] [-T TTYPE]
-
-Tools:
-    calc        Direct calculation: all groups have min size, no ageing or targetting
-    structure   Simulate group structure, but no ageing or targetting
-    full        Full simulation (see -Q and -T parameters)
-
-Options:
-    -h --help   Show this message
-    -n RANGE    Number of nodes, total, e.g. 1000-5000:1000.
-    -r RANGE    Either number of compromised nodes (e.g. 50) or percentage (default is 10%).
-    -k RANGE    Minimum group size, e.g. 10-20.
-    -q RANGE    Quorum size as a proportion with step size, e.g. 0.5-0.7:0.1.
-    -s VAL      Maximum number of steps, each the length of one proof-of-work.
-    -p VAL      Number of times to repeat a true/false simulation to calculate
-                an attack success probability.
-    -Q QTYPE    Quorum algorithm: simple, age or all
-    -T TTYPE    Attack targetting strategy: none, simple or all
-";
-
-#[allow(non_snake_case)]
-#[derive(RustcDecodable)]
-struct Args {
-    cmd_calc: bool,
-    cmd_structure: bool,
-    cmd_full: bool,
-    flag_n: Option<String>,
-    flag_r: Option<String>,
-    flag_k: Option<String>,
-    flag_q: Option<String>,
-    flag_s: Option<NN>,
-    flag_p: Option<NN>,
-    flag_Q: Option<String>,
-    flag_T: Option<String>,
-}
 
 pub trait DefaultStep<T> {
     // Return a default step.
@@ -203,47 +155,62 @@ impl<'a, T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T> + 'a> Iter
     }
 }
 
-pub struct ArgProc {
-    args: Args,
-}
+pub struct ArgProc {}
 
 impl ArgProc {
-    pub fn read_args() -> ArgProc {
-        let args: Args = Docopt::new(USAGE)
-            .and_then(|dopt| dopt.decode())
-            .unwrap_or_else(|e| e.exit());
+    pub fn make_sim_params() -> Vec<SimParams> {
+        let matches = clap_app!(routing_sims =>
+            (version: "0.1")
+            (about: "Calculates vulnerabilities of networks via simulation.\
+                    \
+                    Note that all RANGEs can be specified as simple number (1),\
+                    a range (15-20) or range-with-step (100-200:20), and some can
+                    be specified as percentages (e.g. 10% or 10%-20%:5%).")
+            (@arg tool: -t --tool [TOOL] "Available tools are 'calc' (direct calculation, \
+                    assuming all groups have minimum size, no ageing or targetting), \
+                    'structure' (simulate group structure, then calculate), \
+                    'full' (default option: simulate attacks)")
+            (@arg nodes: -n --nodes [RANGE] "Number of nodes, total, e.g. 1000-5000:1000.")
+            (@arg attack: -a --attack [RANGE] "Either number of compromised nodes (e.g. 50) \
+                    or percentage (default is 10%).")
+            (@arg group: -g --group [RANGE] "Minimum group size, e.g. 10-20.")
+            (@arg quorum: -q --quorum [RANGE] "Quorum size as a proportion of group size, e.g. 0.5-0.7:0.1.")
+            (@arg steps: -s --steps [VALUE] "Maximum number of steps, each the length of one proof-of-work.")
+            (@arg repetitions: -p --repetitions "Number of times to repeat a true/false \
+                    simulation to calculate an attack success probability.")
+            (@arg quorum_alg: -Q --quorumalg "Quorum algorithm: 'simple' group proportion, \
+                    'age' (age and group proportions), 'all' (run both)")
+            (@arg strategy: -S --strategy "Attack targetting strategy: 'none', \
+                    'simple' (naive) targetting, 'all'")
+        )
+            .get_matches();
+            
+        // Create initial parameter set
+        let tool = match matches.value_of("tool").unwrap_or("full") {
+            "calc" => SimType::DirectCalc,
+            "structure" => SimType::Structure,
+            "full" => SimType::FullSim,
+            _ => panic!("unexpected tool"),
+        };
 
-        ArgProc { args: args }
-    }
-
-    // TODO: is Vec suitable for this use?
-    pub fn make_sim_params(&self) -> Vec<SimParams> {
-        let mut v = Vec::new();
-
-        let nodes_range: SamplePoints<NN> = self.args
-            .flag_n
-            .as_ref()
+        let nodes_range: SamplePoints<NN> = matches.value_of("nodes")
             .map_or(SamplePoints::Number(1000), |s| s.parse().expect("parse"));
         let mut nodes_iter = nodes_range.iter();
 
-        let mal_nodes_range: SamplePoints<RelOrAbs> =
-            self.args.flag_r.as_ref().map_or(SamplePoints::Number(RelOrAbs::Rel(0.1)),
-                                             |s| s.parse().expect("parse"));
+        let mal_nodes_range: SamplePoints<RelOrAbs> = matches.value_of("attack")
+            .map_or(SamplePoints::Number(RelOrAbs::Rel(0.1)),
+                                        |s| s.parse().expect("parse"));
         let mut mal_nodes_iter = mal_nodes_range.iter();
 
-        let group_size_range: SamplePoints<NN> = self.args
-            .flag_k
-            .as_ref()
+        let group_size_range: SamplePoints<NN> = matches.value_of("group")
             .map_or(SamplePoints::Number(10), |s| s.parse().expect("parse"));
         let mut group_size_iter = group_size_range.iter();
 
-        let quorum_range = self.args
-            .flag_q
-            .as_ref()
+        let quorum_range = matches.value_of("quorum")
             .map_or(SamplePoints::Number(0.5), |s| s.parse().expect("parse"));
         let mut quorum_iter = quorum_range.iter();
-
-        let q_use_age = match self.args.flag_Q.as_ref().map(|s| s.as_str()) {
+        
+        let q_use_age = match matches.value_of("quorum_alg") {
             None => vec![false],
             Some("simple") => vec![false],
             Some("age") => vec![true],
@@ -252,7 +219,7 @@ impl ArgProc {
         };
         let mut q_use_age_iter = q_use_age.iter();
 
-        let at_type = match self.args.flag_T.as_ref().map(|s| s.as_str()) {
+        let at_type = match matches.value_of("strategy") {
             None => vec![AttackType::Untargetted],
             Some("none") => vec![AttackType::Untargetted],
             Some("simple") => vec![AttackType::SimpleTargetted],
@@ -261,17 +228,7 @@ impl ArgProc {
         };
         let mut at_type_iter = at_type.iter();
 
-        // Create initial parameter set
-        let tool = if self.args.cmd_calc {
-            SimType::DirectCalc
-        } else if self.args.cmd_structure {
-            SimType::Structure
-        } else if self.args.cmd_full {
-            SimType::FullSim
-        } else {
-            unreachable!()
-        };
-        v.push(SimParams {
+        let mut v = vec![SimParams {
             sim_type: tool,
             age_quorum: *q_use_age_iter.next().expect("first iter item"),
             targetting: *at_type_iter.next().expect("first iter item"),
@@ -279,9 +236,9 @@ impl ArgProc {
             num_malicious: mal_nodes_iter.next().expect("first iter item"),
             min_group_size: group_size_iter.next().expect("first iter item"),
             quorum_prop: quorum_iter.next().expect("first iter item"),
-            max_steps: self.args.flag_s.unwrap_or(1000),
-            repetitions: self.args.flag_p.unwrap_or(100),
-        });
+            max_steps: matches.value_of("steps").map(|s| s.parse().expect("parse")).unwrap_or(1000),
+            repetitions: matches.value_of("repetitions").map(|s| s.parse().expect("parse")).unwrap_or(100),
+        }];
 
         // Replicate for all network sizes (num nodes)
         let range = 0..v.len();

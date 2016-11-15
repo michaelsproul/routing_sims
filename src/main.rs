@@ -19,7 +19,8 @@
 
 extern crate rand;
 extern crate rustc_serialize;
-extern crate docopt;
+#[macro_use]
+extern crate clap;
 #[macro_use]
 extern crate log;
 extern crate env_logger;
@@ -88,7 +89,7 @@ impl ToolArgs {
 fn main() {
     env_logger::init().unwrap();
 
-    let param_sets = ArgProc::read_args().make_sim_params();
+    let param_sets = ArgProc::make_sim_params();
 
     info!("Starting to simulate {} different parameter sets",
           param_sets.len());
