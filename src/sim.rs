@@ -26,9 +26,6 @@
 // For now, because lots of stuff isn't implemented yet:
 #![allow(dead_code)]
 
-use super::{NN, RR, Error, Result};
-use super::quorum::AttackStrategy;
-
 use std::cmp::{Ordering, min};
 use std::mem;
 use std::hash::{Hash, Hasher};
@@ -39,6 +36,9 @@ use std::u64;
 
 use rand::{thread_rng, Rng};
 use rand::distributions::{Range, IndependentSample};
+
+use {NN, RR, Error, Result};
+use attack::AttackStrategy;
 
 
 // In the future, we may be able to do this:

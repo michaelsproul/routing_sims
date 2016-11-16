@@ -31,6 +31,7 @@ mod sim;
 mod args;
 mod quorum;
 mod tools;
+mod attack;
 
 use std::result;
 use std::fmt::{self, Formatter};

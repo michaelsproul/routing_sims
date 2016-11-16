@@ -17,9 +17,9 @@
 
 //! Probability tools
 
-use super::{NN, RR};
-
 use std::cmp::min;
+
+use {NN, RR};
 
 
 /// Calculate `n choose k`, i.e. `n! / (k! (n-k)!)`.

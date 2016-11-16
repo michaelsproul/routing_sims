@@ -18,12 +18,13 @@
 /// Drivers of the simulations / calculations
 
 
-use super::{NN, RR, ToolArgs, Error};
-use super::quorum::{Quorum, SimpleQuorum, AttackStrategy, UntargettedAttack};
-use super::prob::{prob_disruption, prob_compromise};
-use super::sim::{Network, new_node_name, NodeData, NoAddRestriction, RestrictOnePerAge};
-
 use std::mem;
+
+use {NN, RR, ToolArgs, Error};
+use quorum::{Quorum, SimpleQuorum};
+use attack::{AttackStrategy, UntargettedAttack};
+use prob::{prob_disruption, prob_compromise};
+use sim::{Network, new_node_name, NodeData, NoAddRestriction, RestrictOnePerAge};
 
 
 pub struct SimResult {

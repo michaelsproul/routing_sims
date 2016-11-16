@@ -17,14 +17,15 @@
 
 //! Argument processing
 
-use super::{ToolArgs, NN, RR};
-use super::tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool, SimResult};
-use super::quorum::*;
-
 use std::str::FromStr;
 use std::fmt::Debug;
 use std::ops::AddAssign;
 use std::cmp::Ordering;
+
+use {ToolArgs, NN, RR};
+use tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool, SimResult};
+use quorum::{SimpleQuorum, AgeQuorum};
+use attack::{UntargettedAttack, SimpleTargettedAttack};
 
 
 pub trait DefaultStep<T> {
