@@ -178,15 +178,14 @@ impl ArgProc {
                     or percentage (default is 10%).")
             (@arg joingood: -j --joingood [RANGE] "Join rate of good nodes (nodes per day); \
                     can be a percentage of total nodes.")
-            (@arg joinbad: --joinbad [RANGE] "Join rate of malicious nodes (nodes per day); \
-                    can be a percentage of malicious nodes. Defaults to 100%.")
-            (@arg leavegood: -l --leavegood [RANGE] "Leave rate of good nodes (nodes per day); \
-                    can be a percentage of total nodes. \
+//             (@arg joinbad: --joinbad [RANGE] "Join rate of malicious nodes (nodes per day); \
+//                     can be a percentage of total nodes. This limits the reset rate of malicious \
+//                     nodes (the network only accepts so many new nodes per day). \
+//                     Defaults to use the same rate as joingood.")
+            (@arg leavegood: -l --leavegood [RANGE] "Leave rate of good nodes (nodes per thousand \
+                    per day); divide number by 1000 to get daily probability of leaving. \
                     Nodes which leave are replaced to maintain the target total number, \
                     respecting the maximum join rate. Leaving happens randomly.")
-            (@arg resettime: --resettime [RANGE] "Time taken for a node to reset (number of days). \
-                    Default is 0.02 (i.e. 50 resets per day). This only limits the number of \
-                    resets per step.")
             (@arg group: -g --group [RANGE] "Minimum group size, e.g. 10-20.")
             (@arg quorum: -q --quorum [RANGE] "Quorum size as a proportion of group size, \
                     e.g. 0.5-0.7:0.1.")
@@ -225,19 +224,14 @@ impl ArgProc {
                     |s| s.parse().expect("parse"));
         let mut join_good_iter = join_good_range.iter();
 
-        let join_bad_range: SamplePoints<RelOrAbs<RR>> = matches.value_of("joinbad")
-            .map_or(SamplePoints::Number(RelOrAbs::Rel(1.0)),
-                    |s| s.parse().expect("parse"));
-        let mut join_bad_iter = join_bad_range.iter();
+        // let join_bad_range: SamplePoints<Option<RelOrAbs<RR>>> = matches.value_of("joinbad")
+        //     .map_or(SamplePoints::Number(None),
+        //             |s| s.parse().expect("parse"));
+        // let mut join_bad_iter = join_bad_range.iter();
 
-        let leave_good_range: SamplePoints<RelOrAbs<RR>> = matches.value_of("leavegood")
-            .map_or(SamplePoints::Number(RelOrAbs::Rel(0.005)),
-                    |s| s.parse().expect("parse"));
+        let leave_good_range: SamplePoints<RR> = matches.value_of("leavegood")
+            .map_or(SamplePoints::Number(1.0), |s| s.parse().expect("parse"));
         let mut leave_good_iter = leave_good_range.iter();
-
-        let reset_time_range: SamplePoints<RR> = matches.value_of("resettime")
-            .map_or(SamplePoints::Number(0.01), |s| s.parse().expect("parse"));
-        let mut reset_time_iter = reset_time_range.iter();
 
         let group_size_range: SamplePoints<NN> = matches.value_of("group")
             .map_or(SamplePoints::Number(10), |s| s.parse().expect("parse"));
@@ -278,9 +272,8 @@ impl ArgProc {
                              num_nodes: nodes_iter.next().expect("first iter item"),
                              num_malicious: mal_nodes_iter.next().expect("first iter item"),
                              join_good: join_good_iter.next().expect("first iter item"),
-                             join_bad: join_bad_iter.next().expect("first iter item"),
+                             // join_bad: join_bad_iter.next().expect("first iter item"),
                              leave_good: leave_good_iter.next().expect("first iter item"),
-                             reset_time: reset_time_iter.next().expect("first iter item"),
                              min_group_size: group_size_iter.next().expect("first iter item"),
                              quorum_prop: quorum_iter.next().expect("first iter item"),
                              proof_time: proof_time_iter.next().expect("first iter item"),
@@ -325,14 +318,14 @@ impl ArgProc {
         }
 
         // Replicate for all join rates of bad nodes
-        let range = 0..v.len();
-        for x in join_bad_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.join_bad = x;
-                v.push(s);
-            }
-        }
+        // let range = 0..v.len();
+        // for x in join_bad_iter {
+        //     for i in range.clone() {
+        //         let mut s = v[i].clone();
+        //         s.join_bad = x;
+        //         v.push(s);
+        //     }
+        // }
 
         // Replicate for all leave rates of good nodes
         let range = 0..v.len();
@@ -340,16 +333,6 @@ impl ArgProc {
             for i in range.clone() {
                 let mut s = v[i].clone();
                 s.leave_good = x;
-                v.push(s);
-            }
-        }
-
-        // Replicate for all reset times
-        let range = 0..v.len();
-        for x in reset_time_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.reset_time = x;
                 v.push(s);
             }
         }
@@ -475,7 +458,9 @@ impl RelOrAbs<RR> {
     }
 }
 
-impl<T: FromStr> FromStr for RelOrAbs<T> where <T as FromStr>::Err: Debug {
+impl<T: FromStr> FromStr for RelOrAbs<T>
+    where <T as FromStr>::Err: Debug
+{
     type Err = ();  // we just panic!
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.ends_with('%') {
@@ -489,7 +474,7 @@ impl<T: FromStr> FromStr for RelOrAbs<T> where <T as FromStr>::Err: Debug {
     }
 }
 
-impl<T: AddAssign+Copy> AddAssign for RelOrAbs<T> {
+impl<T: AddAssign + Copy> AddAssign for RelOrAbs<T> {
     fn add_assign(&mut self, rhs: RelOrAbs<T>) {
         match (self, rhs) {
             (&mut RelOrAbs::Rel(ref mut x), RelOrAbs::Rel(y)) => *x += y,
@@ -499,7 +484,7 @@ impl<T: AddAssign+Copy> AddAssign for RelOrAbs<T> {
     }
 }
 
-impl<T: PartialOrd<T>+Copy> PartialOrd<RelOrAbs<T>> for RelOrAbs<T> {
+impl<T: PartialOrd<T> + Copy> PartialOrd<RelOrAbs<T>> for RelOrAbs<T> {
     fn partial_cmp(&self, rhs: &RelOrAbs<T>) -> Option<Ordering> {
         match (self, rhs) {
             (&RelOrAbs::Rel(x), &RelOrAbs::Rel(ref y)) => x.partial_cmp(y),
@@ -535,9 +520,8 @@ pub struct SimParams {
     pub num_nodes: NN,
     pub num_malicious: RelOrAbs<NN>,
     pub join_good: RelOrAbs<RR>,
-    pub join_bad: RelOrAbs<RR>,
-    pub leave_good: RelOrAbs<RR>,
-    pub reset_time: RR,
+    // pub join_bad: RelOrAbs<RR>,
+    pub leave_good: RR,
     pub min_group_size: NN,
     pub quorum_prop: RR,
     pub proof_time: RR,

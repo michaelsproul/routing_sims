@@ -35,7 +35,6 @@ use std::hash::{Hash, Hasher};
 use std::fmt::{self, Formatter, Binary, Debug};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::marker::PhantomData;
 use std::u64;
 
 use rand::{thread_rng, Rng};
@@ -302,13 +301,12 @@ impl AddRestriction for RestrictOnePerAge {
 
 pub type Group = HashMap<NodeName, NodeData>;
 
-pub struct Network<AddRestriction> {
+pub struct Network {
     min_group_size: usize,
     groups: HashMap<Prefix, Group>,
-    _dummy: PhantomData<AddRestriction>,
 }
 
-impl<AR: AddRestriction> Network<AR> {
+impl Network {
     /// Create. Specify minimum group size.
     ///
     /// An initial, empty, group is created.
@@ -318,7 +316,6 @@ impl<AR: AddRestriction> Network<AR> {
         Network {
             min_group_size: min_group_size,
             groups: groups,
-            _dummy: PhantomData {},
         }
     }
 
@@ -344,7 +341,10 @@ impl<AR: AddRestriction> Network<AR> {
     }
 
     /// Insert a node. Returns the prefix of the group added to.
-    pub fn add_node(&mut self, node_name: NodeName, node_data: NodeData) -> Result<Prefix> {
+    pub fn add_node<AR: AddRestriction>(&mut self,
+                                        node_name: NodeName,
+                                        node_data: NodeData)
+                                        -> Result<Prefix> {
         let prefix = self.find_prefix(node_name);
         let mut group = self.groups.get_mut(&prefix).expect("network must include all groups");
         if group.len() > self.min_group_size && !AR::can_add(&node_data, group) {
@@ -358,7 +358,7 @@ impl<AR: AddRestriction> Network<AR> {
         };
         Ok(prefix)
     }
-    
+
     /// Probabilistically drop nodes (`p` is the chance of each node being dropped).
     /// Return the number of nodes dropped.
     pub fn probabilistic_drop(&mut self, p: RR) -> usize {
@@ -366,7 +366,8 @@ impl<AR: AddRestriction> Network<AR> {
         let mut need_merge = vec![];
         let mut num = 0;
         for (prefix, ref mut group) in &mut self.groups {
-            let to_remove: Vec<_> = group.keys().filter(|_| sample_NN() < thresh).cloned().collect();
+            let to_remove: Vec<_> =
+                group.keys().filter(|_| sample_NN() < thresh).cloned().collect();
             for key in to_remove {
                 group.remove(&key);
                 num += 1;
@@ -375,7 +376,7 @@ impl<AR: AddRestriction> Network<AR> {
                 need_merge.push(*prefix);
             }
         }
-        
+
         // Do any merges needed (after all removals)
         while let Some(prefix) = need_merge.pop() {
             if prefix.bit_count == 0 {
@@ -391,14 +392,15 @@ impl<AR: AddRestriction> Network<AR> {
             };
             let parent = prefix.popped();
             // Groups are disjoint, so all "compatibles" should be descendents of the new "parent"
-            let compatible_prefixes: Vec<_> = self.groups.keys().filter(|k| k.is_compatible(parent)).cloned().collect();
+            let compatible_prefixes: Vec<_> =
+                self.groups.keys().filter(|k| k.is_compatible(parent)).cloned().collect();
             for p in compatible_prefixes {
                 let other_group = self.groups.remove(&p).expect("has group");
                 group.extend(other_group);
             }
             self.groups.insert(parent, group);
         }
-        
+
         num
     }
 
@@ -483,7 +485,8 @@ impl<AR: AddRestriction> Network<AR> {
     /// The simulation driver chooses when
     /// to trigger this. What we do is (1) age each node by 1, (2) pick the oldest node
     /// whose age is a power of 2 (there may be none) and relocate it.
-    /// On relocation, the node is returned (the driver should call add_node with it).
+    /// On relocation, the node is returned (with its old name); the driver should
+    /// create a new name and call add_node with the new name.
     pub fn churn(&mut self, prefix: Prefix, new_node: NodeName) -> Option<(NodeName, NodeData)> {
         let mut group = self.groups.get_mut(&prefix).expect("churn called with invalid group");
         // Increment churn counters and see if any is ready to be relocated.
@@ -516,7 +519,7 @@ impl<AR: AddRestriction> Network<AR> {
         trace!("Relocating a node with age {} and churns {}",
                node_data.age,
                node_data.churns);
-        Some((new_node_name(), node_data))
+        Some((to_relocate, node_data))
     }
 
     fn min_new_group_size(&self) -> usize {

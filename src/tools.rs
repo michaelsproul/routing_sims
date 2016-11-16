@@ -23,8 +23,7 @@ use super::quorum::{Quorum, SimpleQuorum, AttackStrategy, UntargettedAttack};
 use super::prob::{prob_disruption, prob_compromise};
 use super::sim::{Network, new_node_name, NodeData, NoAddRestriction, RestrictOnePerAge};
 
-use std::iter;
-use std::collections::VecDeque;
+use std::mem;
 
 
 pub struct SimResult {
@@ -140,21 +139,21 @@ impl Tool for SimStructureTool {
         let mut attack = UntargettedAttack {};
 
         // Create a network
-        let mut net = Network::<NoAddRestriction>::new(self.args.min_group_size as usize);
-        // Number of nodes to join/leave each step (can be fractional)
+        let mut net = Network::new(self.args.min_group_size as usize);
+        // Number of nodes to join, p each node leaving each step (can be fractional)
         let mut to_join = 0.0;
-        let mut to_leave = 0.0;
+        let mut p_leave = 0.0;
         // Network size and target size
         let mut net_size = 0;
         let target_size = self.args.num_nodes;
         'outer: loop {
             to_join += self.args.join_good;
-            to_leave += self.args.leave_good;
-            
+            p_leave += self.args.leave_good;
+
             while to_join >= 1.0 {
                 to_join -= 1.0;
                 let name = new_node_name();
-                match net.add_node(name, NodeData::new()) {
+                match net.add_node::<NoAddRestriction>(name, NodeData::new()) {
                     Ok(prefix) => {
                         let _prefix = net.maybe_split(prefix, name, &mut attack);
                         net_size += 1;
@@ -169,14 +168,15 @@ impl Tool for SimStructureTool {
                         panic!("Error adding node: {}", e);
                     }
                 }
-            };
-            
-            // only do anything if we expect at least one node to leave
-            if to_leave >= 1.0 {
-                let p_leave = to_leave / (net_size as RR);
-                net_size -= net.probabilistic_drop(p_leave) as NN;
-                to_leave = 0.0;
             }
+
+            // only do anything if probability is significant, otherwise accumulate
+            if p_leave >= 0.001 {
+                net_size -= net.probabilistic_drop(p_leave) as NN;
+                p_leave = 0.0;
+            }
+
+            // End of step (though nothing actually needs to happen here)
         }
 
         let any_group = true;   // only support this now
@@ -257,56 +257,83 @@ impl<Q: Quorum, A: AttackStrategy + Clone> FullSimTool<Q, A> {
         let mut attack = self.attack.clone();
 
         // 1. Create initial network.
-        //TODO: use join_rate and leave_rate as in SimStructureTool
+        // TODO: use join_rate and leave_rate as in SimStructureTool
         // For simplicity, we ignore all add-attempts which fail due to age restrictions
         // (these do not affect the network and would simply be re-added later).
         // Because of this and the assumption that all these nodes are "good",
         // we do not need to simulate proof-of-work here.
-        let mut net = Network::<RestrictOnePerAge>::new(self.args.min_group_size as usize);
-        let num_initial = self.args.num_nodes - self.args.num_malicious;
-        // Pre-generate all nodes to be added, in a Vec.
-        // We can pop from this and on relocation push.
-        let mut to_add: Vec<_> = iter::repeat(0)
-            .take(num_initial as usize)
-            .map(|_| (new_node_name(), NodeData::new()))
-            .collect();
-        let mut n_ops = 0;
+        let mut net = Network::new(self.args.min_group_size as usize);
+        // Number of nodes to join, p each node leaving each step (can be fractional)
+        let mut to_join = 0.0;
+        let mut p_leave = 0.0;
+
+        let mut n_adds = 0;
+        let mut n_leaves = 0;
         let mut n_relocates = 0;
         let mut n_rejects = 0;
-        while let Some((node_name, node_data)) = to_add.pop() {
-            n_ops += 1;
-            trace!("Adding from a queue of length {} with {} groups",
-                   to_add.len() + 1,
-                   net.groups().len());
-            let age = node_data.age();
-            match net.add_node(node_name, node_data) {
-                Ok(prefix) => {
-                    trace!("Added node {} with age {}", node_name, age);
-                    let prefix = net.maybe_split(prefix, node_name, &mut attack);
-                    // Add successful: do churn event.
-                    // The churn may cause a removal from a group; however, either that was an
-                    // old group which just got a new member, or it is a split result with at least
-                    // one node more than the minimum number. Either way merging is not required.
-                    if let Some(node) = net.churn(prefix, node_name) {
-                        n_relocates += 1;
-                        to_add.push(node);
+
+        let target_size = self.args.num_nodes - self.args.num_malicious;
+
+        let mut moving_nodes = vec![];
+
+        'outer: loop {
+            to_join += self.args.join_good;
+            p_leave += self.args.leave_good;
+
+            while to_join >= 1.0 || !moving_nodes.is_empty() {
+                let node_name = new_node_name();
+                let node_data = if let Some(nd) = moving_nodes.pop() {
+                    // We have a moved node; add that first.
+                    // This _doesn't_ count as a joining node, so don't decrement to_join
+                    nd
+                } else {
+                    to_join -= 1.0;
+                    NodeData::new()
+                };
+                let age = node_data.age();
+                match net.add_node::<RestrictOnePerAge>(node_name, node_data) {
+                    Ok(prefix) => {
+                        trace!("Added node {} with age {}", node_name, age);
+                        let prefix = net.maybe_split(prefix, node_name, &mut attack);
+                        // Add successful: do churn event. The churn may cause a removal from a
+                        // group; however, either that was an old group which just got a new
+                        // member, or it is a split result with at least one node more than the
+                        // minimum number. Either way merging is not required.
+                        if let Some((_old_name, node_data)) = net.churn(prefix, node_name) {
+                            n_relocates += 1;
+                            // TODO: should add be delayed?
+                            moving_nodes.push(node_data);
+                        }
+
+                        n_adds += 1;
+                        if n_adds - n_leaves >= target_size {
+                            break 'outer;
+                        }
+                    }
+                    Err(Error::AlreadyExists) |
+                    Err(Error::AddRestriction) => {
+                        n_rejects += 1;
+                    }
+                    Err(e) => {
+                        panic!("Error adding node: {}", e);
                     }
                 }
-                Err(Error::AlreadyExists) |
-                Err(Error::AddRestriction) => {
-                    n_rejects += 1;
-                    // We fixed the number of initial nodes. If this one is incompatible,
-                    // find another.
-                    to_add.push((new_node_name(), NodeData::new()));
-                }
-                Err(e) => {
-                    panic!("Error adding node: {}", e);
-                }
             }
+
+            // only do anything if probability is significant, otherwise accumulate
+            if p_leave >= 0.001 {
+                let n = net.probabilistic_drop(p_leave) as NN;
+                n_leaves += n;
+                p_leave = 0.0;
+            }
+
+            // End of step (though nothing actually needs to happen here)
         }
-        info!("Init done: added {} nodes in {} steps involving {} relocates and {} rejections",
-              num_initial,
-              n_ops,
+        info!("Init done: added {} nodes in {} steps involving {} removals, {} relocates and {} \
+               rejections",
+              target_size,
+              n_adds,
+              n_leaves,
               n_relocates,
               n_rejects);
 
@@ -323,7 +350,8 @@ impl<Q: Quorum, A: AttackStrategy + Clone> FullSimTool<Q, A> {
 
         // Assumption: the network gives joining nodes a group immediately, but does not
         // accept the node as a member until after proof-of-work. Nodes can choose to reset before
-        // doing the work. We assume nodes will not try to reset at any other time.
+        // doing the work (i.e. when told they are being moved due to churn and when new).
+        // We assume nodes will not try to reset at any other time.
         // We assume that nodes can reset and try to join again (with age 0) instantly. This may
         // be problematic if some nodes target groups purely to cause churn events.
 
@@ -335,12 +363,16 @@ impl<Q: Quorum, A: AttackStrategy + Clone> FullSimTool<Q, A> {
         // simply joins whichever group it would now be in. If a node has done proof of work and
         // is not accepted due to age restrictions, it is given a new name and must redo work.
         let mut n_new_malicious = self.args.num_malicious;
-        // Queue of nodes doing proof-of-work. Push to back, pop from front.
-        let mut waiting = VecDeque::new();
+
+        // Nodes about to be inserted, and ones waiting for the next step (after proof-of-work
+        // is complete).
+        let mut moving_nodes = vec![];
+        let mut waiting = vec![];
+
         for _ in 0..self.args.max_steps {
-            // Each round, we firstly deal with all "waiting" nodes, then add any new/reset nodes.
-            while let Some((node_name, node_data)) = waiting.pop_front() {
-                match net.add_node(node_name, node_data) {
+            // Each round, we firstly deal with all moving nodes, then add any new/reset nodes.
+            while let Some((node_name, node_data)) = moving_nodes.pop() {
+                match net.add_node::<RestrictOnePerAge>(node_name, node_data) {
                     Ok(prefix) => {
                         let prefix = net.maybe_split(prefix, node_name, &mut attack);
                         // Add successful: do churn event.
@@ -348,20 +380,26 @@ impl<Q: Quorum, A: AttackStrategy + Clone> FullSimTool<Q, A> {
                         // old group which just got a new member, or it is a split result with at
                         // least one node more than the minimum number. Either way merging
                         // is not required.
-                        if let Some(node) = net.churn(prefix, node_name) {
-                            if node.1.is_malicious() &&
-                               attack.reset_node(&node, net.find_prefix(node_name)) {
+                        if let Some((old_name, node_data)) = net.churn(prefix, node_name) {
+                            let new_name = new_node_name();
+                            if node_data.is_malicious() &&
+                               attack.reset_on_move(&net, old_name, new_name, &node_data) {
+                                // Node resets: drop data, but remember that we need another node
                                 n_new_malicious += 1;
                             } else {
-                                waiting.push_back(node);
+                                waiting.push((new_name, node_data));
                             }
                         }
                     }
                     Err(Error::AlreadyExists) |
                     Err(Error::AddRestriction) => {
                         // Cannot be added: rename and try again next round.
-                        let node = (new_node_name(), node_data);
-                        waiting.push_back(node);
+                        let new_name = new_node_name();
+                        if attack.reset_node(&net, new_name, &node_data) {
+                            n_new_malicious += 1;
+                        } else {
+                            waiting.push((new_name, node_data));
+                        }
                     }
                     Err(e) => {
                         panic!("Error adding node: {}", e);
@@ -369,12 +407,13 @@ impl<Q: Quorum, A: AttackStrategy + Clone> FullSimTool<Q, A> {
                 }
             }
 
+            // TODO: limit number added per step
             while n_new_malicious > 0 {
-                let node = (new_node_name(), NodeData::new_malicious());
-                let prefix = net.find_prefix(node.0);
-                if !attack.reset_node(&node, prefix) {
+                let node_name = new_node_name();
+                let node_data = NodeData::new_malicious();
+                if !attack.reset_node(&net, node_name, &node_data) {
                     n_new_malicious -= 1;
-                    waiting.push_back(node);
+                    waiting.push((node_name, node_data));
                 }
             }
 
@@ -387,6 +426,8 @@ impl<Q: Quorum, A: AttackStrategy + Clone> FullSimTool<Q, A> {
                     disruption = true;
                 }
             }
+
+            mem::swap(&mut moving_nodes, &mut waiting);
         }
 
         // If we didn't return already, no compromise occurred, but disruption may have

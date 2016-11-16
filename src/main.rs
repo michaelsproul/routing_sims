@@ -72,7 +72,7 @@ pub struct ToolArgs {
     num_nodes: NN,
     num_malicious: NN,
     join_good: RR,
-    join_bad: RR,
+    // join_bad: RR,
     leave_good: RR,
     min_group_size: NN,
     quorum_prop: RR,
@@ -92,23 +92,27 @@ impl ToolArgs {
         assert!(params.quorum_prop >= 0.0 && params.quorum_prop <= 1.0);
 
         let join_good = params.join_good.from_base(nn as RR) / step_len;
-        let leave_good = params.leave_good.from_base(nn as RR) / step_len;
+        // Convert from num/1000/day to p/step:
+        let leave_good = params.leave_good / (1000.0 * step_len);
         assert!(join_good > leave_good);
         if (nn as RR) / (join_good - leave_good) > 1000.0 {
             warn!("Join rate ({} nodes/step) - leave rate ({} nodes/step) requires many steps \
                    for init (estimate: {})",
-                   join_good, leave_good,
+                  join_good,
+                  leave_good,
                   ((nn as RR) / (join_good - leave_good)).round() as NN);
         }
         if leave_good > 0.0 {
-            warn!("Leave rate ({} nodes/step) > 0: this might leave groups too small since we don't simulate merging", leave_good);
+            warn!("Leave rate ({} nodes/step) > 0: this might leave groups too small since we \
+                   don't simulate merging",
+                  leave_good);
         }
 
         ToolArgs {
             num_nodes: nn,
             num_malicious: nm,
             join_good: join_good,
-            join_bad: params.join_bad.from_base(nm as RR) / step_len,
+            // join_bad: params.join_bad.map_or(join_good, |rate| rate.from_base(nn as RR) / step_len),
             leave_good: leave_good,
             min_group_size: params.min_group_size,
             quorum_prop: params.quorum_prop,
