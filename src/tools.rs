@@ -24,7 +24,8 @@ use {NN, RR, ToolArgs, Error};
 use quorum::{Quorum, SimpleQuorum};
 use attack::{AttackStrategy, UntargettedAttack};
 use prob::{prob_disruption, prob_compromise};
-use sim::{Network, new_node_name, NodeData, NoAddRestriction, RestrictOnePerAge};
+use node::{new_node_name, NodeData};
+use net::{Network, NoAddRestriction, RestrictOnePerAge};
 
 
 pub struct SimResult {

@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use {NN, RR};
-use sim::{NodeName, NodeData};
+use node::{NodeName, NodeData};
 
 
 /// Describes the "quorum" algorithm

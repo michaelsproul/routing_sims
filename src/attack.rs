@@ -17,7 +17,8 @@
 
 // Attack strategies
 
-use sim::{Prefix, NodeName, NodeData, Network};
+use node::{Prefix, NodeName, NodeData};
+use net::Network;
 
 
 /// Determines a few things about how attacks work.

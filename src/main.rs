@@ -27,7 +27,8 @@ extern crate env_logger;
 extern crate rayon;
 
 mod prob;
-mod sim;
+mod node;
+mod net;
 mod args;
 mod quorum;
 mod tools;
