@@ -32,9 +32,9 @@ use std::collections::hash_map::Entry;
 
 use rand::{thread_rng, Rng};
 
-use {NN, RR, Error, Result};
+use {NN, RR, ToolArgs, Error, Result};
 use attack::AttackStrategy;
-use node::{Prefix, NodeName, NodeData};
+use node::{Prefix, NodeName, NodeData, new_node_name};
 
 
 pub trait AddRestriction {
@@ -64,6 +64,14 @@ pub type Group = HashMap<NodeName, NodeData>;
 pub struct Network {
     min_group_size: usize,
     groups: HashMap<Prefix, Group>,
+    // these are accumulated between steps, not simply reset each step:
+    to_join: RR,
+    p_leave: RR,
+    // nodes pending joining a group this step, and those joining next step:
+    pending_nodes: Vec<NodeData>,
+    moved_nodes: Vec<NodeData>,
+    net_size: NN,
+    target_good: NN,
 }
 
 impl Network {
@@ -76,7 +84,76 @@ impl Network {
         Network {
             min_group_size: min_group_size,
             groups: groups,
+            to_join: 0.0,
+            p_leave: 0.0,
+            pending_nodes: vec![],
+            moved_nodes: vec![],
+            net_size: 0,
+            target_good: 0,
         }
+    }
+
+    /// Set target number of nodes
+    pub fn set_target(&mut self, n_good: NN) {
+        self.target_good = n_good;
+    }
+
+    /// Run a step in the simulation. Return true if we're not done yet.
+    pub fn do_step<AR: AddRestriction>(&mut self,
+                                       args: &ToolArgs,
+                                       attack: &mut AttackStrategy)
+                                       -> bool {
+        self.to_join += args.join_good;
+        self.p_leave += args.leave_good;
+
+        while self.to_join >= 1.0 || !self.pending_nodes.is_empty() {
+            let node_name = new_node_name();
+            let node_data = if let Some(data) = self.pending_nodes.pop() {
+                // We have a moved node; add that first.
+                // This _doesn't_ count as a joining node, so don't decrement to_join
+                data
+            } else {
+                self.to_join -= 1.0;
+                NodeData::new()
+            };
+            let age = node_data.age();
+
+            match self.add_node::<AR>(node_name, node_data) {
+                Ok(prefix) => {
+                    trace!("Added node {} with age {}", node_name, age);
+                    let prefix = self.maybe_split(prefix, node_name, attack);
+                    // Add successful: do churn event. The churn may cause a removal from a
+                    // group; however, either that was an old group which just got a new
+                    // member, or it is a split result with at least one node more than the
+                    // minimum number. Either way merging is not required.
+                    if let Some((_old_name, node_data)) = self.churn(prefix, node_name) {
+                        self.moved_nodes.push(node_data);
+                    }
+
+                    self.net_size += 1;
+                    if self.net_size >= self.target_good {
+                        return false;
+                    }
+                }
+                Err(Error::AlreadyExists) |
+                Err(Error::AddRestriction) => {}
+                Err(e) => {
+                    panic!("Error adding node: {}", e);
+                }
+            }
+        }
+
+        // only do anything if probability is significant, otherwise accumulate
+        if self.p_leave >= 0.001 {
+            let p_leave = self.p_leave;
+            let n = self.probabilistic_drop(p_leave) as NN;
+            self.net_size -= n;
+            self.p_leave = 0.0;
+        }
+
+        mem::swap(&mut self.pending_nodes, &mut self.moved_nodes);
+
+        true
     }
 
     /// Access groups
