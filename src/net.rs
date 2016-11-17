@@ -26,28 +26,34 @@
 // For now, because lots of stuff isn't implemented yet:
 #![allow(dead_code)]
 
+use std::collections::hash_map::{HashMap, Entry};
 use std::mem;
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 
 use rand::{thread_rng, Rng};
 
-use {NN, RR, ToolArgs, Error, Result};
+use {NN, RR, ToolArgs};
 use attack::AttackStrategy;
 use node::{Prefix, NodeName, NodeData, new_node_name};
 
 
+#[allow(non_snake_case)]
+fn sample_NN() -> NN {
+    thread_rng().gen()
+}
+
+/// Controls whether a node can get added to a group
 pub trait AddRestriction {
-    // May prevent add operation, for example if the group has too many nodes
-    // of this age.
+    /// May prevent add operation, for example if the group has too many nodes of this age.
     fn can_add(_node_data: &NodeData, _group: &HashMap<NodeName, NodeData>) -> bool {
         true
     }
 }
 
+/// As the name says: never reject nodes.
 pub struct NoAddRestriction;
 impl AddRestriction for NoAddRestriction {}
 
+/// Limit the number of nodes of certain ages (currently only ages 0 and 1)
 pub struct RestrictOnePerAge;
 impl AddRestriction for RestrictOnePerAge {
     fn can_add(node_data: &NodeData, group: &HashMap<NodeName, NodeData>) -> bool {
@@ -59,19 +65,26 @@ impl AddRestriction for RestrictOnePerAge {
     }
 }
 
+/// A `Group` is a collection of named nodes.
 pub type Group = HashMap<NodeName, NodeData>;
 
+/// A `Network` is a collection of groups.
+///
+/// This struct implements both the low-level network structure code and the high-level code used
+/// to simulate network creation.
 pub struct Network {
     min_group_size: usize,
     groups: HashMap<Prefix, Group>,
-    // these are accumulated between steps, not simply reset each step:
+    // Number of new nodes allowed, and probability of a good node leaving.
+    // These are accumulated between steps, not simply reset each step.
     to_join: RR,
     p_leave: RR,
+    // Number of new nodes available (good and malicious):
+    avail_good: NN,
+    avail_malicious: NN,
     // nodes pending joining a group this step, and those joining next step:
-    pending_nodes: Vec<NodeData>,
-    moved_nodes: Vec<NodeData>,
-    net_size: NN,
-    target_good: NN,
+    pending_nodes: Vec<(NodeName, NodeData)>,
+    pending_next: Vec<(NodeName, NodeData)>,
 }
 
 impl Network {
@@ -86,39 +99,37 @@ impl Network {
             groups: groups,
             to_join: 0.0,
             p_leave: 0.0,
+            avail_good: 0,
+            avail_malicious: 0,
             pending_nodes: vec![],
-            moved_nodes: vec![],
-            net_size: 0,
-            target_good: 0,
+            pending_next: vec![],
         }
     }
 
-    /// Set target number of nodes
-    pub fn set_target(&mut self, n_good: NN) {
-        self.target_good = n_good;
+    /// Are any nodes available to be added still?
+    pub fn has_avail(&self) -> bool {
+        self.avail_good > 0 || self.avail_malicious > 0
     }
 
-    /// Run a step in the simulation. Return true if we're not done yet.
-    pub fn do_step<AR: AddRestriction>(&mut self,
-                                       args: &ToolArgs,
-                                       attack: &mut AttackStrategy)
-                                       -> bool {
-        self.to_join += args.join_good;
-        self.p_leave += args.leave_good;
+    /// Add (good, malicious) nodes to the queue of "available" nodes waiting to be added.
+    pub fn add_avail(&mut self, n_good: NN, n_malicious: NN) {
+        self.avail_good += n_good;
+        self.avail_malicious += n_malicious;
+    }
 
-        while self.to_join >= 1.0 || !self.pending_nodes.is_empty() {
-            let node_name = new_node_name();
-            let node_data = if let Some(data) = self.pending_nodes.pop() {
-                // We have a moved node; add that first.
-                // This _doesn't_ count as a joining node, so don't decrement to_join
-                data
-            } else {
-                self.to_join -= 1.0;
-                NodeData::new()
-            };
+    /// Run a step in the simulation.
+    ///
+    /// Note: if a node has done proof-of-work but its original target group splits, it
+    /// simply joins whichever group it would now be in. If a node has done proof of work and
+    /// is not accepted due to age restrictions, it is given a new name and must redo work.
+    pub fn do_step<AR: AddRestriction>(&mut self, args: &ToolArgs, attack: &mut AttackStrategy) {
+        self.to_join += args.max_join_rate;
+        self.p_leave += args.leave_rate_good;
+
+        // Add any nodes which were waiting for proof-of-work to complete
+        while let Some((node_name, node_data)) = self.pending_nodes.pop() {
             let age = node_data.age();
-
-            match self.add_node::<AR>(node_name, node_data) {
+            let opt_moved = match self.add_node::<AR>(node_name, node_data) {
                 Ok(prefix) => {
                     trace!("Added node {} with age {}", node_name, age);
                     let prefix = self.maybe_split(prefix, node_name, attack);
@@ -126,20 +137,54 @@ impl Network {
                     // group; however, either that was an old group which just got a new
                     // member, or it is a split result with at least one node more than the
                     // minimum number. Either way merging is not required.
-                    if let Some((_old_name, node_data)) = self.churn(prefix, node_name) {
-                        self.moved_nodes.push(node_data);
-                    }
+                    self.churn(prefix, node_name).map(|(old_name, data)| (Some(old_name), data))
+                }
+                Err(node_data) => Some((None, node_data)),
+            };
+            if let Some((opt_old_name, data)) = opt_moved {
+                let new_name = new_node_name();
+                if data.is_malicious() &&
+                   attack.reset_on_new_name(self, opt_old_name, new_name, &data) {
+                    // Node resets: drop data, but remember that we need another malicious node
+                    self.avail_malicious += 1;
+                } else {
+                    self.pending_next.push((new_name, data));
+                }
+            }
+        }
 
-                    self.net_size += 1;
-                    if self.net_size >= self.target_good {
-                        return false;
-                    }
+        // Add new nodes, up to the maximum allowed this step; these do not get inserted until
+        // next step.
+        while self.to_join >= 1.0 {
+            self.to_join -= 1.0;
+
+            // Numbers are unsigned, so not 0 implies > 0:
+            let is_malicious = match (self.avail_malicious, self.avail_good) {
+                (0, 0) => {
+                    break;
                 }
-                Err(Error::AlreadyExists) |
-                Err(Error::AddRestriction) => {}
-                Err(e) => {
-                    panic!("Error adding node: {}", e);
+                (_m, 0) => true,
+                (0, _g) => false,
+                (m, g) => {
+                    let p = (m as RR) / ((m + g) as RR);
+                    let thresh = (p * (NN::max_value() as RR)).round() as NN;
+                    sample_NN() < thresh
                 }
+            };
+            let new_name = new_node_name();
+            let data = NodeData::new(is_malicious);
+
+            if is_malicious && attack.reset_on_new_name(self, None, new_name, &data) {
+                // Attacking node resets: let a new one replace it. The only thing which changed is
+                // that self.to_join has been decremented.
+                continue;
+            }
+
+            self.pending_next.push((new_name, data));
+            if is_malicious {
+                self.avail_malicious -= 1;
+            } else {
+                self.avail_good -= 1;
             }
         }
 
@@ -147,13 +192,12 @@ impl Network {
         if self.p_leave >= 0.001 {
             let p_leave = self.p_leave;
             let n = self.probabilistic_drop(p_leave) as NN;
-            self.net_size -= n;
+            // Add replacements to maintain size. Note that only good nodes leave like this.
+            self.avail_good += n;
             self.p_leave = 0.0;
         }
 
-        mem::swap(&mut self.pending_nodes, &mut self.moved_nodes);
-
-        true
+        mem::swap(&mut self.pending_nodes, &mut self.pending_next);
     }
 
     /// Access groups
@@ -177,36 +221,41 @@ impl Network {
         unreachable!()
     }
 
-    /// Insert a node. Returns the prefix of the group added to.
+    /// Insert a node. Returns the prefix of the group added to on success, or the node data it
+    /// failed to add on failure caused by an AddRestriction or name collision (in both cases the
+    /// node should be renamed).
     pub fn add_node<AR: AddRestriction>(&mut self,
                                         node_name: NodeName,
                                         node_data: NodeData)
-                                        -> Result<Prefix> {
+                                        -> Result<Prefix, NodeData> {
         let prefix = self.find_prefix(node_name);
         let mut group = self.groups.get_mut(&prefix).expect("network must include all groups");
         if group.len() > self.min_group_size && !AR::can_add(&node_data, group) {
-            return Err(Error::AddRestriction);
+            return Err(node_data);
         }
         match group.entry(node_name) {
             Entry::Vacant(e) => e.insert(node_data),
             Entry::Occupied(_) => {
-                return Err(Error::AlreadyExists);
+                return Err(node_data);
             }
         };
         Ok(prefix)
     }
 
-    /// Probabilistically drop nodes (`p` is the chance of each node being dropped).
+    /// Probabilistically drop good nodes (`p` is the chance of each node being dropped).
     /// Return the number of nodes dropped.
     pub fn probabilistic_drop(&mut self, p: RR) -> usize {
         let thresh = (p * (NN::max_value() as RR)).round() as NN;
-        #[allow(non_snake_case)]
-        let sample_NN = || -> NN { thread_rng().gen() };
         let mut need_merge = vec![];
         let mut num = 0;
         for (prefix, ref mut group) in &mut self.groups {
-            let to_remove: Vec<_> =
-                group.keys().filter(|_| sample_NN() < thresh).cloned().collect();
+            let to_remove: Vec<_> = group.iter()
+                .filter_map(|(ref key, ref data)| if !data.is_malicious() && sample_NN() < thresh {
+                    Some(**key)
+                } else {
+                    None
+                })
+                .collect();
             for key in to_remove {
                 group.remove(&key);
                 num += 1;
@@ -253,18 +302,12 @@ impl Network {
         if !self.need_split(prefix) {
             return prefix;
         }
-        match self.do_split(prefix, attack) {
-            Ok((p0, p1)) => {
-                if p0.matches(name) {
-                    p0
-                } else {
-                    assert!(p1.matches(name));
-                    p1
-                }
-            }
-            Err(e) => {
-                panic!("Error during split: {}", e);
-            }
+        let (p0, p1) = self.do_split(prefix, attack);
+        if p0.matches(name) {
+            p0
+        } else {
+            assert!(p1.matches(name));
+            p1
         }
     }
 
@@ -283,14 +326,11 @@ impl Network {
     }
 
     /// Do a split. Return prefixes of new groups.
-    pub fn do_split(&mut self,
-                    prefix: Prefix,
-                    attack: &mut AttackStrategy)
-                    -> Result<(Prefix, Prefix)> {
+    pub fn do_split(&mut self, prefix: Prefix, attack: &mut AttackStrategy) -> (Prefix, Prefix) {
         let old_group = match self.groups.remove(&prefix) {
             Some(g) => g,
             None => {
-                return Err(Error::NotFound);
+                panic!("Error during split: prefix {:?} not found", prefix);
             }
         };
         let prefix0 = prefix.pushed(false);
@@ -299,19 +339,19 @@ impl Network {
             .partition(|node| prefix0.matches(node.0));
         for (name, data) in &group0 {
             if data.is_malicious() {
-                attack.split(prefix, prefix0, *name, data);
+                attack.on_split(prefix, prefix0, *name, data);
             }
         }
         for (name, data) in &group1 {
             if data.is_malicious() {
-                attack.split(prefix, prefix1, *name, data);
+                attack.on_split(prefix, prefix1, *name, data);
             }
         }
         let inserted = self.groups.insert(prefix0, group0).is_none();
         assert!(inserted);
         let inserted = self.groups.insert(prefix1, group1).is_none();
         assert!(inserted);
-        Ok((prefix0, prefix1))
+        (prefix0, prefix1)
     }
 
     /// Do a group churn event. The churn affects all members of a group specified

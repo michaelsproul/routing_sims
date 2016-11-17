@@ -223,21 +223,12 @@ pub struct NodeData {
 }
 
 impl NodeData {
-    /// New data (initial age and churns, not malicious)
-    pub fn new() -> Self {
+    /// New data (initial age and churns, possibly malicious depending on parrameter)
+    pub fn new(malicious: bool) -> Self {
         NodeData {
             age: 0,
             churns: 0,
-            is_malicious: false,
-        }
-    }
-
-    /// New data (initial age and churns, is malicious)
-    pub fn new_malicious() -> Self {
-        NodeData {
-            age: 0,
-            churns: 0,
-            is_malicious: true,
+            is_malicious: malicious,
         }
     }
 

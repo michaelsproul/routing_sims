@@ -26,40 +26,31 @@ use net::Network;
 /// A clone is made for each simulation, which may hold mutable state.
 /// This state is lost at the end of the simulation.
 pub trait AttackStrategy {
-    /// Called when splitting occurs
+    /// Called when splitting occurs on all malicious nodes, with their old and new names and
+    /// prefixes.
     ///
     /// Default implementation: do nothing.
-    fn split(&mut self,
-             _old_prefix: Prefix,
-             _new_prefix: Prefix,
-             _node_name: NodeName,
-             _node_data: &NodeData) {
+    fn on_split(&mut self,
+                _old_prefix: Prefix,
+                _new_prefix: Prefix,
+                _node_name: NodeName,
+                _node_data: &NodeData) {
     }
 
-    /// Called when a malicious node is added and told its name (when new or when an
-    /// "add restriction" forces it to take a different name). This should return true only
+    /// Called when a malicious node is added or moved and told its new name. If moved, the method
+    /// is also passed the old name. This should return true only
     /// if the attacker decides to reset this malicious node now (before doing proof-of-work).
     ///
     /// Group prefix can be obtained via `net.find_prefix(name)`.
     ///
     /// Default implementation: return false (do not split).
-    fn reset_node(&mut self, _net: &Network, _new_name: NodeName, _node_data: &NodeData) -> bool {
+    fn reset_on_new_name(&mut self,
+                         _net: &Network,
+                         _old_name: Option<NodeName>,
+                         _new_name: NodeName,
+                         _node_data: &NodeData)
+                         -> bool {
         false
-    }
-
-    /// The method is called when a node is aged via churning. This should return true only if
-    /// the attacker decides to reset this malicious node now (before doing proof-of-work).
-    ///
-    /// Group prefix can be obtained via `net.find_prefix(name)`.
-    ///
-    /// Default implemention: ignore the old name and call `reset_node`.
-    fn reset_on_move(&mut self,
-                     net: &Network,
-                     _old_name: NodeName,
-                     new_name: NodeName,
-                     node_data: &NodeData)
-                     -> bool {
-        self.reset_node(net, new_name, node_data)
     }
 }
 
@@ -83,17 +74,22 @@ impl SimpleTargettedAttack {
 }
 
 impl AttackStrategy for SimpleTargettedAttack {
-    fn split(&mut self,
-             old_prefix: Prefix,
-             new_prefix: Prefix,
-             _node_name: NodeName,
-             _node_data: &NodeData) {
+    fn on_split(&mut self,
+                old_prefix: Prefix,
+                new_prefix: Prefix,
+                _node_name: NodeName,
+                _node_data: &NodeData) {
         if self.target == Some(old_prefix) {
             self.target = Some(new_prefix);
         }
     }
 
-    fn reset_node(&mut self, net: &Network, new_name: NodeName, _node_data: &NodeData) -> bool {
+    fn reset_on_new_name(&mut self,
+                         net: &Network,
+                         _old_name: Option<NodeName>,
+                         new_name: NodeName,
+                         _node_data: &NodeData)
+                         -> bool {
         let prefix = net.find_prefix(new_name);
         if let Some(target) = self.target {
             // reset any nodes not joining the target group
