@@ -17,9 +17,9 @@
 
 //! Probability tools
 
-use super::{NN, RR};
-
 use std::cmp::min;
+
+use {NN, RR};
 
 
 /// Calculate `n choose k`, i.e. `n! / (k! (n-k)!)`.
@@ -27,7 +27,7 @@ pub fn choose(n: NN, mut k: NN) -> RR {
     assert!(n >= k);
     let mut result: RR = 1 as RR;
     k = min(k, n - k);
-    for kp in 1...k {
+    for kp in 1..(k + 1) {
         // kp goes from 1 to k
         result *= ((n - kp + 1) as RR) / (kp as RR);
     }
@@ -65,7 +65,7 @@ pub fn prob_compromise(n: NN, r: NN, k: NN, q: NN) -> RR {
 
     // First, calculate the number of ways of choosing less than q red nodes
     let mut combs_compr: RR = 0 as RR;
-    for x in q...k {
+    for x in q..(k + 1) {
         if x > r {
             continue;   // impossible: 0 combinations to add
         }

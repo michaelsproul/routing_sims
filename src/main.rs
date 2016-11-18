@@ -17,30 +17,29 @@
 
 // Calculations to do with security of routing system
 
-#![feature(inclusive_range_syntax)]
-
 extern crate rand;
 extern crate rustc_serialize;
-extern crate docopt;
+#[macro_use]
+extern crate clap;
 #[macro_use]
 extern crate log;
 extern crate env_logger;
 extern crate rayon;
 
 mod prob;
-mod sim;
+mod node;
+mod net;
 mod args;
 mod quorum;
 mod tools;
+mod attack;
 
-use std::result;
-use std::fmt::{self, Formatter};
 use std::cmp::max;
 
 use rayon::prelude::*;
 use rayon::par_iter::collect::collect_into;
 
-use args::{ArgProc, PARAM_TITLES};
+use args::{ArgProc, SimParams, RelOrAbs};
 
 
 // We could use templating but there's no reason not to do the easy thing and
@@ -49,40 +48,70 @@ use args::{ArgProc, PARAM_TITLES};
 pub type NN = u64;
 pub type RR = f64;
 
-/// Error type
-pub enum Error {
-    AddRestriction,
-    AlreadyExists,
-    NotFound,
-}
-
-/// Result type
-pub type Result<T> = result::Result<T, Error>;
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            &Error::AddRestriction => write!(f, "addition prevented by AddRestriction"),
-            &Error::AlreadyExists => write!(f, "already exists"),
-            &Error::NotFound => write!(f, "not found"),
-        }
-    }
-}
-
+pub const PARAM_TITLES: [&'static str; 10] = ["NInitial",
+                                              "NAttack",
+                                              "MaxJoin",
+                                              "BackJoin",
+                                              "PLeave",
+                                              "MinGroup",
+                                              "QuorumProp",
+                                              "MaxSteps",
+                                              "P(disruption)",
+                                              "P(compromise)"];
 pub struct ToolArgs {
-    num_nodes: NN,
-    num_malicious: NN,
+    // number initial
+    num_initial: NN,
+    // number malicious added at start of attack
+    num_attacking: NN,
+    // maximum number joining (nodes per step)
+    max_join_rate: RR,
+    // background rate of new good nodes during attack (nodes per step)
+    add_rate_good: RR,
+    // leave rate of good nodes (probability each node leaving per step)
+    leave_rate_good: RR,
     min_group_size: NN,
     quorum_prop: RR,
-    any_group: bool,
     max_steps: NN,
-    repetitions: NN,
 }
 
 impl ToolArgs {
-    fn check_invariant(&self) {
-        assert!(self.num_nodes >= self.num_malicious);
-        assert!(self.quorum_prop >= 0.0 && self.quorum_prop <= 1.0);
+    pub fn from_params(params: &SimParams) -> Self {
+        let nn = params.num_initial;
+        let nm = params.num_attacking.from_base(nn as RR);
+
+        // Step length in days:
+        let step_len = params.proof_time;
+
+        assert!(params.quorum_prop >= 0.0 && params.quorum_prop <= 1.0);
+
+        let max_join = params.max_join.from_base(nn as RR) / step_len;
+        // Convert from num/day to p/step:
+        let add_good = params.add_good.from_base(nn as RR) / step_len;
+        let p_leave = match params.leave_good {
+            RelOrAbs::Rel(r) => r * 0.01,   // number per 100
+            RelOrAbs::Abs(a) => a,
+        };
+        let leave_good = p_leave / step_len;
+        assert!(max_join > add_good);
+        assert!(max_join > leave_good);
+        if (nn as RR) / (max_join - leave_good) > 10000.0 {
+            warn!("Join rate ({} nodes/step) - leave rate ({} nodes/step) requires many steps \
+                   for init (estimate: {})",
+                  max_join,
+                  leave_good,
+                  ((nn as RR) / (max_join - leave_good)).round() as NN);
+        }
+
+        ToolArgs {
+            num_initial: nn,
+            num_attacking: nm,
+            max_join_rate: max_join,
+            add_rate_good: add_good,
+            leave_rate_good: leave_good,
+            min_group_size: params.min_group_size,
+            quorum_prop: params.quorum_prop,
+            max_steps: (params.max_days / step_len).round() as NN,
+        }
     }
 }
 
@@ -90,12 +119,13 @@ impl ToolArgs {
 fn main() {
     env_logger::init().unwrap();
 
-    let param_sets = ArgProc::read_args().make_sim_params();
+    let (repetitions, param_sets) = ArgProc::make_sim_params();
+    // TODO: print number of sims and/or progress
 
     info!("Starting to simulate {} different parameter sets",
           param_sets.len());
     let mut results = Vec::new();
-    collect_into(param_sets.par_iter().map(|item| item.result()),
+    collect_into(param_sets.into_par_iter().map(|item| item.result(repetitions)),
                  &mut results);
 
     //     tool.print_message();
@@ -104,28 +134,28 @@ fn main() {
         print!("{1:<0$}", col_widths[col], PARAM_TITLES[col]);
         print!(" ");
     }
-    println!();
+    println!("");
 
-    for (params, results) in param_sets.iter().zip(results) {
-        print!("{1:<0$}", col_widths[0], params.sim_type.name());
+    for (args, result) in results {
+        print!("{1:<0$}", col_widths[0], args.num_initial);
         print!(" ");
-        print!("{1:<0$}", col_widths[1], params.age_quorum);
+        print!("{1:<0$}", col_widths[1], args.num_attacking);
         print!(" ");
-        print!("{1:<0$}", col_widths[2], params.targetting.name());
+        print!("{1:<0$}", col_widths[2], args.max_join_rate);
         print!(" ");
-        print!("{1:<0$}", col_widths[3], params.num_nodes);
+        print!("{1:<0$}", col_widths[3], args.add_rate_good);
         print!(" ");
-        print!("{1:<0$}",
-               col_widths[4],
-               params.num_malicious.from_base(params.num_nodes));
+        print!("{1:<0$}", col_widths[4], args.leave_rate_good);
         print!(" ");
-        print!("{1:<0$}", col_widths[5], params.min_group_size);
+        print!("{1:<0$}", col_widths[5], args.min_group_size);
         print!(" ");
-        print!("{1:<.*}", col_widths[6] - 2, params.quorum_prop);
+        print!("{1:<.*}", col_widths[6] - 2, args.quorum_prop);
         print!(" ");
-        print!("{1:<.*}", col_widths[7] - 2, results.p_disrupt);
+        print!("{1:<.*}", col_widths[7] - 2, args.max_steps);
         print!(" ");
-        print!("{1:<.*}", col_widths[8] - 2, results.p_compromise);
-        println!();
+        print!("{1:<.*}", col_widths[8] - 2, result.p_disrupt());
+        print!(" ");
+        print!("{1:<.*}", col_widths[9] - 2, result.p_compromise());
+        println!("");
     }
 }

@@ -18,18 +18,25 @@
 /// Drivers of the simulations / calculations
 
 
-use super::{NN, RR, ToolArgs, Error};
-use super::quorum::{Quorum, SimpleQuorum, AttackStrategy, UntargettedAttack};
-use super::prob::{prob_disruption, prob_compromise};
-use super::sim::{Network, new_node_name, NodeData, NoAddRestriction, RestrictOnePerAge};
+use rayon::prelude::*;
 
-use std::iter;
-use std::collections::VecDeque;
+use {NN, RR, ToolArgs};
+use quorum::{Quorum, SimpleQuorum};
+use attack::{AttackStrategy, UntargettedAttack};
+use prob::{prob_disruption, prob_compromise};
+use net::{Network, NoAddRestriction, RestrictOnePerAge};
 
 
-pub struct SimResult {
-    pub p_disrupt: RR,
-    pub p_compromise: RR,
+/// First value is probability of disruption, second is probability of compromise.
+#[derive(Clone, Copy)]
+pub struct SimResult(RR, RR);
+impl SimResult {
+    pub fn p_disrupt(&self) -> RR {
+        self.0
+    }
+    pub fn p_compromise(&self) -> RR {
+        self.1
+    }
 }
 
 
@@ -38,19 +45,22 @@ pub trait Tool {
     fn print_message(&self);
 
     /// Calculate the probability of compromise (range: 0 to 1).
-    fn calc_p_compromise(&self) -> SimResult;
+    ///
+    /// `repetitions` is how many times to repeat the simulation; this is only applicable to the
+    /// full sim.
+    fn calc_p_compromise(&self, repetitions: u32) -> SimResult;
 }
 
 
 /// Simplest tool: assumes all groups have minimum size; cannot simulate
 /// targeting or ageing.
-pub struct DirectCalcTool {
-    args: ToolArgs,
+pub struct DirectCalcTool<'a> {
+    args: &'a ToolArgs,
     quorum: SimpleQuorum,
 }
 
-impl DirectCalcTool {
-    pub fn new(args: ToolArgs) -> Self {
+impl<'a> DirectCalcTool<'a> {
+    pub fn new(args: &'a ToolArgs) -> Self {
         let quorum = SimpleQuorum::from(args.quorum_prop);
         DirectCalcTool {
             args: args,
@@ -59,7 +69,7 @@ impl DirectCalcTool {
     }
 }
 
-impl Tool for DirectCalcTool {
+impl<'a> Tool for DirectCalcTool<'a> {
     fn print_message(&self) {
         println!("Tool: calculate probability of compromise, assuming all groups have minimum \
                   size");
@@ -71,33 +81,24 @@ impl Tool for DirectCalcTool {
         }
     }
 
-    fn calc_p_compromise(&self) -> SimResult {
+    fn calc_p_compromise(&self, _: u32) -> SimResult {
         let k = self.args.min_group_size;
         let q = self.quorum.quorum_size(k).expect("simple quorum size");
-        let pd = prob_disruption(self.args.num_nodes, self.args.num_malicious, k, q);
-        let pc = prob_compromise(self.args.num_nodes, self.args.num_malicious, k, q);
+        let n = self.args.num_initial + self.args.num_attacking;
+        let pd = prob_disruption(n, self.args.num_attacking, k, q);
+        let pc = prob_compromise(n, self.args.num_attacking, k, q);
 
         trace!("n: {}, r: {}, k: {}, q: {}, pd: {:.e}, pc: {:.e}",
-               self.args.num_nodes,
-               self.args.num_malicious,
+               n,
+               self.args.num_attacking,
                k,
                q,
                pd,
                pc);
 
-        let any_group = true;   // only support this now
-        if any_group {
-            let n_groups = (self.args.num_nodes as RR) / (self.args.min_group_size as RR);
-            SimResult {
-                p_disrupt: 1.0 - (1.0 - pd).powf(n_groups),
-                p_compromise: 1.0 - (1.0 - pc).powf(n_groups),
-            }
-        } else {
-            SimResult {
-                p_disrupt: pd,
-                p_compromise: pc,
-            }
-        }
+        let n_groups = (n as RR) / (self.args.min_group_size as RR);
+        SimResult(1.0 - (1.0 - pd).powf(n_groups),
+                  1.0 - (1.0 - pc).powf(n_groups))
     }
 }
 
@@ -108,13 +109,13 @@ impl Tool for DirectCalcTool {
 /// mode, but has the same limitations.
 ///
 /// Does not relocate nodes (node ageing).
-pub struct SimStructureTool {
-    args: ToolArgs,
+pub struct SimStructureTool<'a> {
+    args: &'a ToolArgs,
     quorum: SimpleQuorum,
 }
 
-impl SimStructureTool {
-    pub fn new(args: ToolArgs) -> Self {
+impl<'a> SimStructureTool<'a> {
+    pub fn new(args: &'a ToolArgs) -> Self {
         let quorum = SimpleQuorum::from(args.quorum_prop);
         SimStructureTool {
             args: args,
@@ -123,7 +124,7 @@ impl SimStructureTool {
     }
 }
 
-impl Tool for SimStructureTool {
+impl<'a> Tool for SimStructureTool<'a> {
     fn print_message(&self) {
         println!("Tool: simulate allocation of nodes to groups; each has size at least the \
                   specified minimum size");
@@ -135,77 +136,39 @@ impl Tool for SimStructureTool {
         }
     }
 
-    fn calc_p_compromise(&self) -> SimResult {
+    fn calc_p_compromise(&self, _: u32) -> SimResult {
         // We need an "attack" strategy, though we only support one here
         let mut attack = UntargettedAttack {};
 
-        // Create a network
-        let mut net = Network::<NoAddRestriction>::new(self.args.min_group_size as usize);
-        let mut remaining = self.args.num_nodes;
-        while remaining > 0 {
-            let name = new_node_name();
-            match net.add_node(name, NodeData::new()) {
-                Ok(prefix) => {
-                    remaining -= 1;
-                    let _prefix = net.maybe_split(prefix, name, &mut attack);
-                }
-                Err(Error::AlreadyExists) => {
-                    continue;
-                }
-                Err(e) => {
-                    panic!("Error adding node: {}", e);
-                }
-            };
+        // Create a network of good nodes (this tool assumes all nodes are good in the sim then
+        // assumes some are bad in subsequent calculations).
+        let mut net = Network::new(self.args.min_group_size as usize);
+        // Yes, *attacking* nodes are *good* for this network initialisation!
+        net.add_avail(self.args.num_initial + self.args.num_attacking, 0);
+        while net.has_avail() {
+            net.do_step::<NoAddRestriction>(&self.args, &mut attack);
         }
+        // The above got all available nodes ready for insert, but the last step will have left
+        // some pending insert, so do one more step. Note that we can't wait until the queues are
+        // empty because background-leaving may result in a constant churn.
+        net.do_step::<NoAddRestriction>(&self.args, &mut attack);
 
-        let any_group = true;   // only support this now
-        if any_group {
-            // This isn't quite right, since one group not compromised does
-            // tell you _something_ about the distribution of malicious nodes,
-            // thus probabilities are not indepedent. But unless there are a lot
-            // of malicious nodes it should be close.
-            let mut p_no_disruption = 1.0;
-            let mut p_no_compromise = 1.0;
-            for (_, group) in net.groups() {
-                let k = group.len() as NN;
-                let q = self.quorum.quorum_size(k).expect("simple quorum size");
-                let pd = prob_disruption(self.args.num_nodes, self.args.num_malicious, k, q);
-                let pc = prob_compromise(self.args.num_nodes, self.args.num_malicious, k, q);
-                p_no_disruption *= 1.0 - pd;
-                p_no_compromise *= 1.0 - pc;
-            }
-            SimResult {
-                p_disrupt: 1.0 - p_no_disruption,
-                p_compromise: 1.0 - p_no_compromise,
-            }
-        } else {
-            // Calculate probability of compromise of one selected group.
-
-            // Take the group appearing first in self.groups. Since hash-maps
-            // are randomly ordered in Rust, there should be nothing special
-            // about this group.
-            let (_, group) =
-                net.groups().iter().next().expect("there should be at least one group");
+        // This isn't quite right, since one group not compromised does
+        // tell you _something_ about the distribution of malicious nodes,
+        // thus probabilities are not indepedent. But unless there are a lot
+        // of malicious nodes it should be close.
+        let mut p_no_disruption = 1.0;
+        let mut p_no_compromise = 1.0;
+        for (_, group) in net.groups() {
             let k = group.len() as NN;
             let q = self.quorum.quorum_size(k).expect("simple quorum size");
-
-            // We already have code to do the rest:
-            let pd = prob_disruption(self.args.num_nodes, self.args.num_malicious, k, q);
-            let pc = prob_compromise(self.args.num_nodes, self.args.num_malicious, k, q);
-
-            trace!("n: {}, r: {}, k: {}, q: {}, pd: {:.e}, pc: {:.e}",
-                   self.args.num_nodes,
-                   self.args.num_malicious,
-                   k,
-                   q,
-                   pd,
-                   pc);
-
-            SimResult {
-                p_disrupt: pd,
-                p_compromise: pc,
-            }
+            let n = self.args.num_initial + self.args.num_attacking;
+            let pd = prob_disruption(n, self.args.num_attacking, k, q);
+            let pc = prob_compromise(n, self.args.num_attacking, k, q);
+            p_no_disruption *= 1.0 - pd;
+            p_no_compromise *= 1.0 - pc;
         }
+        SimResult(1.0 - p_no_disruption, 1.0 - p_no_compromise)
     }
 }
 
@@ -213,14 +176,14 @@ impl Tool for SimStructureTool {
 /// A tool which simulates group operations.
 ///
 /// Can relocate nodes according to the node ageing RFC (roughly).
-pub struct FullSimTool<Q: Quorum, A: AttackStrategy + Clone> {
-    args: ToolArgs,
+pub struct FullSimTool<'a, Q: Quorum, A: AttackStrategy + Clone> {
+    args: &'a ToolArgs,
     quorum: Q,
     attack: A,
 }
 
-impl<Q: Quorum, A: AttackStrategy + Clone> FullSimTool<Q, A> {
-    pub fn new(args: ToolArgs, mut quorum: Q, strategy: A) -> Self {
+impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
+    pub fn new(args: &'a ToolArgs, mut quorum: Q, strategy: A) -> Self {
         quorum.set_quorum_proportion(args.quorum_prop);
         FullSimTool {
             args: args,
@@ -229,138 +192,43 @@ impl<Q: Quorum, A: AttackStrategy + Clone> FullSimTool<Q, A> {
         }
     }
 
-    // Run a simulation. Result is a pair of booleans, `(any_disruption, any_compromise)`.
-    fn run_sim(&self) -> (bool, bool) {
+    // Run a simulation. Result has either 0 or 1 in each field, `(any_disruption, any_compromise)`.
+    fn run_sim(&self) -> SimResult {
         info!("Starting sim");
-        assert!(self.args.any_group);
-        let mut disruption = false;
         let mut attack = self.attack.clone();
 
-        // 1. Create initial network.
-        // For simplicity, we ignore all add-attempts which fail due to age restrictions
-        // (these do not affect the network and would simply be re-added later).
-        // Because of this and the assumption that all these nodes are "good",
-        // we do not need to simulate proof-of-work here.
-        let mut net = Network::<RestrictOnePerAge>::new(self.args.min_group_size as usize);
-        let num_initial = self.args.num_nodes - self.args.num_malicious;
-        // Pre-generate all nodes to be added, in a Vec.
-        // We can pop from this and on relocation push.
-        let mut to_add: Vec<_> = iter::repeat(0)
-            .take(num_initial as usize)
-            .map(|_| (new_node_name(), NodeData::new()))
-            .collect();
-        let mut n_ops = 0;
-        let mut n_relocates = 0;
-        let mut n_rejects = 0;
-        while let Some((node_name, node_data)) = to_add.pop() {
-            n_ops += 1;
-            trace!("Adding from a queue of length {} with {} groups",
-                   to_add.len() + 1,
-                   net.groups().len());
-            let age = node_data.age();
-            match net.add_node(node_name, node_data) {
-                Ok(prefix) => {
-                    trace!("Added node {} with age {}", node_name, age);
-                    let prefix = net.maybe_split(prefix, node_name, &mut attack);
-                    // Add successful: do churn event.
-                    // The churn may cause a removal from a group; however, either that was an
-                    // old group which just got a new member, or it is a split result with at least
-                    // one node more than the minimum number. Either way merging is not required.
-                    if let Some(node) = net.churn(prefix, node_name) {
-                        n_relocates += 1;
-                        to_add.push(node);
-                    }
-                }
-                Err(Error::AlreadyExists) |
-                Err(Error::AddRestriction) => {
-                    n_rejects += 1;
-                    // We fixed the number of initial nodes. If this one is incompatible,
-                    // find another.
-                    to_add.push((new_node_name(), NodeData::new()));
-                }
-                Err(e) => {
-                    panic!("Error adding node: {}", e);
-                }
-            }
+        // 1. Create an initial network of good nodes.
+        let mut net = Network::new(self.args.min_group_size as usize);
+        net.add_avail(self.args.num_initial, 0);
+        while net.has_avail() {
+            net.do_step::<RestrictOnePerAge>(&self.args, &mut attack);
         }
-        info!("Init done: added {} nodes in {} steps involving {} relocates and {} rejections",
-              num_initial,
-              n_ops,
-              n_relocates,
-              n_rejects);
+        // The above got all available nodes ready for insert, but the last step will have left
+        // some pending insert, so do one more step. Note that we can't wait until the queues are
+        // empty because background-leaving may result in a constant churn.
+        net.do_step::<RestrictOnePerAge>(&self.args, &mut attack);
 
         // 2. Start attack
-        // Assumption: all nodes in the network (malicious or not) have the same performance.
-        // Proof-of-work time-outs can be used to filter out any nodes with slow CPU/network.
-        // We use a step, which is how long proof-of-work takes. We don't set a value here, but
-        // for example 10000 × 1-hour steps is over a year.
+        // In this model, malicious nodes are added once while good nodes can be added
+        // continuously.
+        net.add_avail(0, self.args.num_attacking);
+        let mut to_add_good = 0.0;
 
-        // Assumption: only malicious nodes are added after this time, and a fixed number. This
-        // is a worst case scenario; if there were background-adding of other nodes or if all the
-        // attacking nodes were not added simultaneously, the attack would be harder.
+        let mut disruption = false;
 
-        // Assumption: the network gives joining nodes a group immediately, but does not
-        // accept the node as a member until after proof-of-work. Nodes can choose to reset before
-        // doing the work. We assume nodes will not try to reset at any other time.
-        // We assume that nodes can reset and try to join again (with age 0) instantly. This may
-        // be problematic if some nodes target groups purely to cause churn events.
-
-        // Unlike above, we now use a two-step join process: (1) nodes are "pre-added": they are
-        // given a name and group, then either reset or wait until (2) nodes have done
-        // proof-of-work and can join.
-
-        // Assumption: if a node has done proof-of-work but its original target group splits, it
-        // simply joins whichever group it would now be in. If a node has done proof of work and
-        // is not accepted due to age restrictions, it is given a new name and must redo work.
-        let mut n_new_malicious = self.args.num_malicious;
-        // Queue of nodes doing proof-of-work. Push to back, pop from front.
-        let mut waiting = VecDeque::new();
         for _ in 0..self.args.max_steps {
-            // Each round, we firstly deal with all "waiting" nodes, then add any new/reset nodes.
-            while let Some((node_name, node_data)) = waiting.pop_front() {
-                match net.add_node(node_name, node_data) {
-                    Ok(prefix) => {
-                        let prefix = net.maybe_split(prefix, node_name, &mut attack);
-                        // Add successful: do churn event.
-                        // The churn may cause a removal from a group; however, either that was an
-                        // old group which just got a new member, or it is a split result with at
-                        // least one node more than the minimum number. Either way merging
-                        // is not required.
-                        if let Some(node) = net.churn(prefix, node_name) {
-                            if node.1.is_malicious() &&
-                               attack.reset_node(&node, net.find_prefix(node_name)) {
-                                n_new_malicious += 1;
-                            } else {
-                                waiting.push_back(node);
-                            }
-                        }
-                    }
-                    Err(Error::AlreadyExists) |
-                    Err(Error::AddRestriction) => {
-                        // Cannot be added: rename and try again next round.
-                        let node = (new_node_name(), node_data);
-                        waiting.push_back(node);
-                    }
-                    Err(e) => {
-                        panic!("Error adding node: {}", e);
-                    }
-                }
-            }
+            to_add_good += self.args.add_rate_good;
+            let n_new = to_add_good.floor();
+            net.add_avail(n_new as NN, 0);
+            to_add_good -= n_new;
 
-            while n_new_malicious > 0 {
-                let node = (new_node_name(), NodeData::new_malicious());
-                let prefix = net.find_prefix(node.0);
-                if !attack.reset_node(&node, prefix) {
-                    n_new_malicious -= 1;
-                    waiting.push_back(node);
-                }
-            }
+            net.do_step::<RestrictOnePerAge>(&self.args, &mut attack);
 
             // Finally, we check if disruption or compromise occurred:
             for (_, ref group) in net.groups() {
                 if self.quorum.quorum_compromised(group) {
                     // Compromise implies disruption!
-                    return (true, true);
+                    return SimResult(1.0, 1.0);
                 } else if self.quorum.quorum_disrupted(group) {
                     disruption = true;
                 }
@@ -368,11 +236,14 @@ impl<Q: Quorum, A: AttackStrategy + Clone> FullSimTool<Q, A> {
         }
 
         // If we didn't return already, no compromise occurred, but disruption may have
-        (disruption, false)
+        SimResult(if disruption { 1.0 } else { 0.0 }, 0.0)
     }
 }
 
-impl<Q: Quorum, A: AttackStrategy + Clone> Tool for FullSimTool<Q, A> {
+impl<'a, Q: Quorum, A: AttackStrategy + Clone> Tool for FullSimTool<'a, Q, A>
+    where Q: Sync,
+          A: Sync
+{
     fn print_message(&self) {
         println!("Tool: simulate group operations");
         let any_group = true;   // only support this now
@@ -383,22 +254,14 @@ impl<Q: Quorum, A: AttackStrategy + Clone> Tool for FullSimTool<Q, A> {
         }
     }
 
-    fn calc_p_compromise(&self) -> SimResult {
-        let mut n_disruptions = 0;
-        let mut n_compromises = 0;
-        for _ in 0..self.args.repetitions {
-            let r = self.run_sim();
-            if r.0 {
-                n_disruptions += 1;
-            }
-            if r.1 {
-                n_compromises += 1;
-            }
-        }
-        let denom = self.args.repetitions as RR;
-        SimResult {
-            p_disrupt: (n_disruptions as RR) / denom,
-            p_compromise: (n_compromises as RR) / denom,
-        }
+    fn calc_p_compromise(&self, repetitions: u32) -> SimResult {
+        let result = (0..repetitions)
+            .into_par_iter()
+            .map(|_| self.run_sim())
+            .reduce(|| SimResult(0.0, 0.0),
+                    |v1, v2| SimResult(v1.0 + v2.0, v1.1 + v2.1));
+
+        let denom = repetitions as RR;
+        SimResult(result.0 / denom, result.1 / denom)
     }
 }

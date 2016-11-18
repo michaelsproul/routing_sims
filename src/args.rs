@@ -17,63 +17,17 @@
 
 //! Argument processing
 
-use docopt::Docopt;
-use super::{ToolArgs, NN, RR};
-use super::tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool, SimResult};
-use super::quorum::*;
-
 use std::str::FromStr;
 use std::fmt::Debug;
 use std::ops::AddAssign;
 use std::cmp::Ordering;
+use std::process;
 
+use {ToolArgs, NN, RR};
+use tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool, SimResult};
+use quorum::{SimpleQuorum, AgeQuorum};
+use attack::{UntargettedAttack, SimpleTargettedAttack};
 
-#[cfg_attr(rustfmt, rustfmt_skip)]
-const USAGE: &'static str = "
-Probability computation tool.
-
-Usage:
-    routing-sims [-h | --help]
-    routing-sims calc \
-     [-n RANGE] [-r RANGE] [-k RANGE] [-q RANGE] [-s VAL] [-p VAL]
-    routing-sims structure [-n \
-     RANGE] [-r RANGE] [-k RANGE] [-q RANGE] [-s VAL] [-p VAL]
-    routing-sims full [-n RANGE] \
-     [-r RANGE] [-k RANGE] [-q RANGE] [-s VAL] [-p VAL] [-Q QTYPE] [-T TTYPE]
-
-Tools:
-    calc        Direct calculation: all groups have min size, no ageing or targetting
-    structure   Simulate group structure, but no ageing or targetting
-    full        Full simulation (see -Q and -T parameters)
-
-Options:
-    -h --help   Show this message
-    -n RANGE    Number of nodes, total, e.g. 1000-5000:1000.
-    -r RANGE    Either number of compromised nodes (e.g. 50) or percentage (default is 10%).
-    -k RANGE    Minimum group size, e.g. 10-20.
-    -q RANGE    Quorum size as a proportion with step size, e.g. 0.5-0.7:0.1.
-    -s VAL      Maximum number of steps, each the length of one proof-of-work.
-    -p VAL      Number of times to repeat a true/false simulation to calculate
-                an attack success probability.
-    -Q QTYPE    Quorum algorithm: simple, age or all
-    -T TTYPE    Attack targetting strategy: none, simple or all
-";
-
-#[allow(non_snake_case)]
-#[derive(RustcDecodable)]
-struct Args {
-    cmd_calc: bool,
-    cmd_structure: bool,
-    cmd_full: bool,
-    flag_n: Option<String>,
-    flag_r: Option<String>,
-    flag_k: Option<String>,
-    flag_q: Option<String>,
-    flag_s: Option<NN>,
-    flag_p: Option<NN>,
-    flag_Q: Option<String>,
-    flag_T: Option<String>,
-}
 
 pub trait DefaultStep<T> {
     // Return a default step.
@@ -203,47 +157,178 @@ impl<'a, T: Copy + Debug + AddAssign + PartialOrd<T> + DefaultStep<T> + 'a> Iter
     }
 }
 
-pub struct ArgProc {
-    args: Args,
-}
+pub struct ArgProc {}
 
 impl ArgProc {
-    pub fn read_args() -> ArgProc {
-        let args: Args = Docopt::new(USAGE)
-            .and_then(|dopt| dopt.decode())
-            .unwrap_or_else(|e| e.exit());
+    /// Return (repetitions, vec[sim params])
+    pub fn make_sim_params() -> (u32, Vec<SimParams>) {
+        let matches = clap_app!(routing_sims =>
+            (version: "0.1")
+            (about: "Calculates vulnerabilities of networks via simulation.\
+                    \n\n\
+                    Note that all RANGEs can be specified as simple number (1), \
+                    a range (15-20) or range-with-step (100-200:20), and some can \
+                    be specified as percentages (e.g. 10% or 10%-20%:5%).\
+                    \n\n\
+                    All times are specified in days and may be fractional. Step length is \
+                    determined automatically.")
+            (@arg about: -A --about "Print a more detailed message about the simulation and exit. \
+                    This describes assumptions made in the simulation.")
+            (@arg tool: -t --tool [TOOL] "Available tools are 'calc' (direct calculation, \
+                    assuming all groups have minimum size, no ageing or targetting), \
+                    'structure' (simulate group structure, then calculate), \
+                    'full' (default option: simulate attacks). \
+                    Run with --tool=TOOL --about for more details.")
+            (@arg nodes: -n --nodes [RANGE] "Initial number of nodes (all uncompromised).")
+            (@arg attacking: -a --attacking [RANGE] "Number of malicious nodes added in attack. \
+                    Either an absolute number (e.g. 50) or a percentage of the number of initial \
+                    nodes.")
+            (@arg maxjoin: -j --maxjoin [RANGE] "Maximum rate at which new nodes join the network \
+                    (nodes per day); can be a percentage of initial nodes.")
+            (@arg backjoin: -b --backjoin [RANGE] "Background joining rate of good nodes \
+                    during an attack (nodes per day); can be a percentage of initial nodes.")
+            (@arg leavegood: -l --leavegood [RANGE] "Leave rate of good nodes (chance of each \
+                    node leaving each day); can be a percentage (expected number per 100 per \
+                    day). Nodes which leave are replaced with new nodes to maintain the target \
+                    number. Leaving happens randomly.")
+            (@arg group: -g --group [RANGE] "Minimum group size, e.g. 10-20.")
+            (@arg quorum: -q --quorum [RANGE] "Quorum size as a proportion of group size, \
+                    e.g. 0.5-0.7:0.1.")
+            (@arg prooftime: --prooftime [RANGE] "Time taken to complete resource proof (days). \
+                    Default is 1.")
+            (@arg maxdays: -d --maxdays [RANGE] "Maximum length of an attack before giving up \
+                    (days).")
+            (@arg repetitions: -p --repetitions [NUM] "Number of times to repeat a true/false \
+                    simulation to calculate an attack success probability.")
+            (@arg quorum_alg: -Q --quorumalg "Quorum algorithm: 'simple' group proportion, \
+                    'age' (age and group proportions), 'all' (run both)")
+            (@arg strategy: -S --strategy "Attack targetting strategy: 'none', \
+                    'simple' (naive) targetting, 'all'")
+        )
+            .get_matches();
 
-        ArgProc { args: args }
-    }
+        // Create initial parameter set
+        let tool = match matches.value_of("tool").unwrap_or("full") {
+            "calc" => SimType::DirectCalc,
+            "structure" => SimType::Structure,
+            "full" => SimType::FullSim,
+            _ => panic!("unexpected tool"),
+        };
 
-    // TODO: is Vec suitable for this use?
-    pub fn make_sim_params(&self) -> Vec<SimParams> {
-        let mut v = Vec::new();
+        if matches.is_present("about") {
+            println!("About tool {}:", tool.name());
+            println!("");
+            match tool {
+                SimType::DirectCalc => {
+                    println!("\
+This is the simplest tool: it assumes that all groups have minimum size and
+cannot simulate targeting or ageing. It does not simulate a network but
+directly calculates the outcome (much faster and more precise, but limited and
+may not be accurate to all assumptions).");
+                }
+                SimType::Structure => {
+                    println!("\
+This is a compromise between direct calculation and network simulations: it
+simulates an initial network, then calculates the probabilities of disruction
+and of compromise assuming random distribution of malicious nodes within this
+network. This makes less assumptions about network behaviour than the direct
+calculation method while still being fairly fast.
 
-        let nodes_range: SamplePoints<NN> = self.args
-            .flag_n
-            .as_ref()
+The simulation is divided into steps based on the proof time. All nodes are
+added to the set of available nodes, and at each step some of these are added
+to the network limited to the maximum join rate (--maxjoin parameter).
+Additionally, if the leave rate is non-zero, each node has a chance of leaving,
+in which case a replacement is added to the queue of available nodes waiting
+to be added to the network.
+
+The simulation does not, in effect, use node ageing: node ages get incremented,
+but no add restrictions apply and age-based quorum cannot be used. It does
+move nodes based on age, however the result should not be any different than
+a few more nodes leaving and rejoining.
+
+Results may be over-precise since they do not take network variances into
+account.");
+                }
+                SimType::FullSim => {
+                    println!("\
+Simulations network creation and an attack in two phases.
+
+The simulation is divided into two phases: firstly an initial network of good
+(uncompromised) nodes is created, then malicious nodes are added. During the
+first phase, the number of available nodes to be added to the network is fixed
+(--nodes parameter), and all available nodes are good. At the start of the
+second phase, all attacking (malicious) nodes are added to the set of available
+nodes (--attacking parameter), and optionally good nodes are added to the set
+each step (--backjoin parameter).
+
+Step length is set based on the proof time. Each step nodes from the set of
+available nodes are added to the network, limited by the maximum join rate.
+When both malicious and good nodes are available, nodes are selected randomly
+according to their ratios. If the leave rate is non-zero, each good node has a
+chance of being removed (malicious nodes are assumed not to leave; all nodes
+which leave are replaced by a new node in the set of available nodes).
+
+All added nodes are delayed one step to account for proof of work time; when
+actually added, a churn operation happens, which may age and move an existing
+node in the target group. Malicious nodes are told their new name and group
+before completing proof-of-work and may reset immediately; this is done by
+removing them and adding another node to the set of available nodes (note that
+the max join rate limits how many resets it is useful to do).
+
+The simulation runs until a time limit is reached (--maxdays parameter) unless
+a group is compromised before this limit. Many simulations are run
+(--repetitions parameter) to calculate probabilities of compromise and
+disruption.
+
+Assumption: all nodes (malicious or not) have the same performance and take the
+same time to complete proof-of-work.
+                    ");
+                }
+            }
+            process::exit(0);
+        }
+
+        let nodes_range: SamplePoints<NN> = matches.value_of("nodes")
             .map_or(SamplePoints::Number(1000), |s| s.parse().expect("parse"));
         let mut nodes_iter = nodes_range.iter();
 
-        let mal_nodes_range: SamplePoints<RelOrAbs> =
-            self.args.flag_r.as_ref().map_or(SamplePoints::Number(RelOrAbs::Rel(0.1)),
-                                             |s| s.parse().expect("parse"));
-        let mut mal_nodes_iter = mal_nodes_range.iter();
+        let at_nodes_range: SamplePoints<RelOrAbs<NN>> = matches.value_of("attacking")
+            .map_or(SamplePoints::Number(RelOrAbs::Rel(0.1)),
+                    |s| s.parse().expect("parse"));
+        let mut at_nodes_iter = at_nodes_range.iter();
 
-        let group_size_range: SamplePoints<NN> = self.args
-            .flag_k
-            .as_ref()
+        let max_join_range: SamplePoints<RelOrAbs<RR>> = matches.value_of("maxjoin")
+            .map_or(SamplePoints::Number(RelOrAbs::Rel(0.02)),
+                    |s| s.parse().expect("parse"));
+        let mut max_join_iter = max_join_range.iter();
+
+        let add_good_range: SamplePoints<RelOrAbs<RR>> = matches.value_of("backjoin")
+            .map_or(SamplePoints::Number(RelOrAbs::Rel(0.001)),
+                    |s| s.parse().expect("parse"));
+        let mut add_good_iter = add_good_range.iter();
+
+        let leave_good_range: SamplePoints<RelOrAbs<RR>> = matches.value_of("leavegood")
+            .map_or(SamplePoints::Number(RelOrAbs::Rel(0.001)),
+                    |s| s.parse().expect("parse"));
+        let mut leave_good_iter = leave_good_range.iter();
+
+        let group_size_range: SamplePoints<NN> = matches.value_of("group")
             .map_or(SamplePoints::Number(10), |s| s.parse().expect("parse"));
         let mut group_size_iter = group_size_range.iter();
 
-        let quorum_range = self.args
-            .flag_q
-            .as_ref()
+        let quorum_range = matches.value_of("quorum")
             .map_or(SamplePoints::Number(0.5), |s| s.parse().expect("parse"));
         let mut quorum_iter = quorum_range.iter();
 
-        let q_use_age = match self.args.flag_Q.as_ref().map(|s| s.as_str()) {
+        let proof_time_range: SamplePoints<RR> = matches.value_of("prooftime")
+            .map_or(SamplePoints::Number(1.0), |s| s.parse().expect("parse"));
+        let mut proof_time_iter = proof_time_range.iter();
+
+        let max_days_range: SamplePoints<RR> = matches.value_of("maxdays")
+            .map_or(SamplePoints::Number(100.0), |s| s.parse().expect("parse"));
+        let mut max_days_iter = max_days_range.iter();
+
+        let q_use_age = match matches.value_of("quorum_alg") {
             None => vec![false],
             Some("simple") => vec![false],
             Some("age") => vec![true],
@@ -252,7 +337,7 @@ impl ArgProc {
         };
         let mut q_use_age_iter = q_use_age.iter();
 
-        let at_type = match self.args.flag_T.as_ref().map(|s| s.as_str()) {
+        let at_type = match matches.value_of("strategy") {
             None => vec![AttackType::Untargetted],
             Some("none") => vec![AttackType::Untargetted],
             Some("simple") => vec![AttackType::SimpleTargetted],
@@ -261,45 +346,69 @@ impl ArgProc {
         };
         let mut at_type_iter = at_type.iter();
 
-        // Create initial parameter set
-        let tool = if self.args.cmd_calc {
-            SimType::DirectCalc
-        } else if self.args.cmd_structure {
-            SimType::Structure
-        } else if self.args.cmd_full {
-            SimType::FullSim
-        } else {
-            unreachable!()
-        };
-        v.push(SimParams {
-            sim_type: tool,
-            age_quorum: *q_use_age_iter.next().expect("first iter item"),
-            targetting: *at_type_iter.next().expect("first iter item"),
-            num_nodes: nodes_iter.next().expect("first iter item"),
-            num_malicious: mal_nodes_iter.next().expect("first iter item"),
-            min_group_size: group_size_iter.next().expect("first iter item"),
-            quorum_prop: quorum_iter.next().expect("first iter item"),
-            max_steps: self.args.flag_s.unwrap_or(1000),
-            repetitions: self.args.flag_p.unwrap_or(100),
-        });
+        let mut v = vec![SimParams {
+                             sim_type: tool,
+                             num_initial: nodes_iter.next().expect("first iter item"),
+                             num_attacking: at_nodes_iter.next().expect("first iter item"),
+                             max_join: max_join_iter.next().expect("first iter item"),
+                             add_good: add_good_iter.next().expect("first iter item"),
+                             leave_good: leave_good_iter.next().expect("first iter item"),
+                             min_group_size: group_size_iter.next().expect("first iter item"),
+                             quorum_prop: quorum_iter.next().expect("first iter item"),
+                             proof_time: proof_time_iter.next().expect("first iter item"),
+                             max_days: max_days_iter.next().expect("first iter item"),
+                             age_quorum: *q_use_age_iter.next().expect("first iter item"),
+                             targetting: *at_type_iter.next().expect("first iter item"),
+                         }];
+
+        // TODO: check we're not going to cause out-of-memory here!
 
         // Replicate for all network sizes (num nodes)
         let range = 0..v.len();
         for n in nodes_iter {
             for i in range.clone() {
                 let mut s = v[i].clone();
-                s.num_nodes = n;
+                s.num_initial = n;
                 v.push(s);
             }
         }
 
         // Replicate for all numbers of malicious nodes
         let range = 0..v.len();
-        for r in mal_nodes_iter {
+        for r in at_nodes_iter {
             for i in range.clone() {
                 let mut s = v[i].clone();
-                // NOTE: it's important that we replicate over num_nodes first!
-                s.num_malicious = r;
+                s.num_attacking = r;
+                v.push(s);
+            }
+        }
+
+        // Replicate for all join rates of good nodes
+        let range = 0..v.len();
+        for x in max_join_iter {
+            for i in range.clone() {
+                let mut s = v[i].clone();
+                s.max_join = x;
+                v.push(s);
+            }
+        }
+
+        // Replicate for all leave rates of good nodes
+        let range = 0..v.len();
+        for x in add_good_iter {
+            for i in range.clone() {
+                let mut s = v[i].clone();
+                s.add_good = x;
+                v.push(s);
+            }
+        }
+
+        // Replicate for all leave rates of good nodes
+        let range = 0..v.len();
+        for x in leave_good_iter {
+            for i in range.clone() {
+                let mut s = v[i].clone();
+                s.leave_good = x;
                 v.push(s);
             }
         }
@@ -324,6 +433,26 @@ impl ArgProc {
             }
         }
 
+        // Replicate for all proof-of-work times
+        let range = 0..v.len();
+        for x in proof_time_iter {
+            for i in range.clone() {
+                let mut s = v[i].clone();
+                s.proof_time = x;
+                v.push(s);
+            }
+        }
+
+        // Replicate for all max days
+        let range = 0..v.len();
+        for x in max_days_iter {
+            for i in range.clone() {
+                let mut s = v[i].clone();
+                s.max_days = x;
+                v.push(s);
+            }
+        }
+
         // Replicate for all quorum types
         let range = 0..v.len();
         for q in q_use_age_iter {
@@ -344,7 +473,10 @@ impl ArgProc {
             }
         }
 
-        v
+        let repetitions = matches.value_of("repetitions")
+            .map(|s| s.parse().expect("parse"))
+            .unwrap_or(100);
+        (repetitions, v)
     }
 }
 
@@ -382,21 +514,32 @@ impl AttackType {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum RelOrAbs {
+pub enum RelOrAbs<T> {
     Rel(RR),
-    Abs(NN),
+    Abs(T),
 }
 
-impl RelOrAbs {
-    pub fn from_base(self, base: NN) -> NN {
+impl RelOrAbs<NN> {
+    pub fn from_base(self, base: RR) -> NN {
         match self {
-            RelOrAbs::Rel(r) => ((base as RR) * r) as NN,
+            RelOrAbs::Rel(r) => (base * r).round() as NN,
             RelOrAbs::Abs(n) => n,
         }
     }
 }
 
-impl FromStr for RelOrAbs {
+impl RelOrAbs<RR> {
+    pub fn from_base(self, base: RR) -> RR {
+        match self {
+            RelOrAbs::Rel(r) => base * r,
+            RelOrAbs::Abs(n) => n,
+        }
+    }
+}
+
+impl<T: FromStr> FromStr for RelOrAbs<T>
+    where <T as FromStr>::Err: Debug
+{
     type Err = ();  // we just panic!
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.ends_with('%') {
@@ -410,8 +553,8 @@ impl FromStr for RelOrAbs {
     }
 }
 
-impl AddAssign for RelOrAbs {
-    fn add_assign(&mut self, rhs: RelOrAbs) {
+impl<T: AddAssign + Copy> AddAssign for RelOrAbs<T> {
+    fn add_assign(&mut self, rhs: RelOrAbs<T>) {
         match (self, rhs) {
             (&mut RelOrAbs::Rel(ref mut x), RelOrAbs::Rel(y)) => *x += y,
             (&mut RelOrAbs::Abs(ref mut x), RelOrAbs::Abs(y)) => *x += y,
@@ -420,8 +563,8 @@ impl AddAssign for RelOrAbs {
     }
 }
 
-impl PartialOrd<RelOrAbs> for RelOrAbs {
-    fn partial_cmp(&self, rhs: &RelOrAbs) -> Option<Ordering> {
+impl<T: PartialOrd<T> + Copy> PartialOrd<RelOrAbs<T>> for RelOrAbs<T> {
+    fn partial_cmp(&self, rhs: &RelOrAbs<T>) -> Option<Ordering> {
         match (self, rhs) {
             (&RelOrAbs::Rel(x), &RelOrAbs::Rel(ref y)) => x.partial_cmp(y),
             (&RelOrAbs::Abs(x), &RelOrAbs::Abs(ref y)) => x.partial_cmp(y),
@@ -430,77 +573,68 @@ impl PartialOrd<RelOrAbs> for RelOrAbs {
     }
 }
 
-impl DefaultStep<RelOrAbs> for RelOrAbs {
-    fn default_step(x: RelOrAbs) -> RelOrAbs {
+impl<T: From<u32>> DefaultStep<RelOrAbs<T>> for RelOrAbs<T> {
+    fn default_step(x: RelOrAbs<T>) -> RelOrAbs<T> {
         match x {
             RelOrAbs::Rel(_) => RelOrAbs::Rel(0.1),
-            RelOrAbs::Abs(_) => RelOrAbs::Abs(1),
+            RelOrAbs::Abs(_) => RelOrAbs::Abs(1.into()),
         }
     }
 }
 
-pub const PARAM_TITLES: [&'static str; 9] = ["Type",
-                                             "AgeQuorum",
-                                             "Targetting",
-                                             "Nodes",
-                                             "Malicious",
-                                             "MinGroup",
-                                             "QuorumProp",
-                                             "P(disruption)",
-                                             "P(compromise)"];
 #[derive(Clone)]
 pub struct SimParams {
     pub sim_type: SimType,
     pub age_quorum: bool,
     pub targetting: AttackType,
-    pub num_nodes: NN,
-    pub num_malicious: RelOrAbs,
+    pub num_initial: NN,
+    pub num_attacking: RelOrAbs<NN>,
+    pub max_join: RelOrAbs<RR>,
+    pub add_good: RelOrAbs<RR>,
+    pub leave_good: RelOrAbs<RR>,
     pub min_group_size: NN,
     pub quorum_prop: RR,
-    pub max_steps: NN,
-    pub repetitions: NN,
+    pub proof_time: RR,
+    pub max_days: RR,
 }
 
 impl SimParams {
-    pub fn result(&self) -> SimResult {
-        let args = ToolArgs {
-            num_nodes: self.num_nodes,
-            num_malicious: self.num_malicious.from_base(self.num_nodes),
-            min_group_size: self.min_group_size,
-            quorum_prop: self.quorum_prop,
-            any_group: true, // only support this mode now
-            max_steps: self.max_steps,
-            repetitions: self.repetitions,
-        };
-        args.check_invariant();
+    pub fn result(&self, repetitions: u32) -> (ToolArgs, SimResult) {
+        let args = ToolArgs::from_params(self);
 
-        let tool: Box<Tool> = match self.sim_type {
-            SimType::DirectCalc => Box::new(DirectCalcTool::new(args)),
-            SimType::Structure => Box::new(SimStructureTool::new(args)),
-            SimType::FullSim => {
-                // note: FullSimTool is templated on quorum and attack strategy parameters, so
-                // we need to create the whole thing at once (not create parameters first)
-                match (self.age_quorum, self.targetting) {
-                    (false, AttackType::Untargetted) => {
-                        Box::new(FullSimTool::new(args, SimpleQuorum::new(), UntargettedAttack {}))
-                    }
-                    (true, AttackType::Untargetted) => {
-                        Box::new(FullSimTool::new(args, AgeQuorum::new(), UntargettedAttack {}))
-                    }
-                    (false, AttackType::SimpleTargetted) => {
-                        Box::new(FullSimTool::new(args,
-                                                  SimpleQuorum::new(),
-                                                  SimpleTargettedAttack::new()))
-                    }
-                    (true, AttackType::SimpleTargetted) => {
-                        Box::new(FullSimTool::new(args,
-                                                  AgeQuorum::new(),
-                                                  SimpleTargettedAttack::new()))
+        let result = {
+            let tool: Box<Tool> = match self.sim_type {
+                SimType::DirectCalc => Box::new(DirectCalcTool::new(&args)),
+                SimType::Structure => Box::new(SimStructureTool::new(&args)),
+                SimType::FullSim => {
+                    // note: FullSimTool is templated on quorum and attack strategy parameters, so
+                    // we need to create the whole thing at once (not create parameters first)
+                    match (self.age_quorum, self.targetting) {
+                        (false, AttackType::Untargetted) => {
+                            Box::new(FullSimTool::new(&args,
+                                                      SimpleQuorum::new(),
+                                                      UntargettedAttack {}))
+                        }
+                        (true, AttackType::Untargetted) => {
+                            Box::new(FullSimTool::new(&args,
+                                                      AgeQuorum::new(),
+                                                      UntargettedAttack {}))
+                        }
+                        (false, AttackType::SimpleTargetted) => {
+                            Box::new(FullSimTool::new(&args,
+                                                      SimpleQuorum::new(),
+                                                      SimpleTargettedAttack::new()))
+                        }
+                        (true, AttackType::SimpleTargetted) => {
+                            Box::new(FullSimTool::new(&args,
+                                                      AgeQuorum::new(),
+                                                      SimpleTargettedAttack::new()))
+                        }
                     }
                 }
-            }
+            };
+            tool.calc_p_compromise(repetitions)
         };
-
-        tool.calc_p_compromise()
+        (args, result)
     }
 }
