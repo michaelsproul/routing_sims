@@ -23,9 +23,6 @@
 //! *   Node names are simply random numbers
 //! *   Node leaving and group merging are not simulated
 
-// For now, because lots of stuff isn't implemented yet:
-#![allow(dead_code)]
-
 use std::collections::hash_map::{HashMap, Entry};
 use std::mem;
 
@@ -313,12 +310,7 @@ impl Network {
 
     /// Check whether some group needs splitting.
     pub fn need_split(&self, prefix: Prefix) -> bool {
-        let group = match self.groups.get(&prefix) {
-            Some(g) => g,
-            None => {
-                return false;   // ignore "not found" error
-            }
-        };
+        let group = &self.groups[&prefix];
         let prefix0 = prefix.pushed(false);
         let size_all = group.len();
         let size0 = group.iter().filter(|node| prefix0.matches(*node.0)).count();

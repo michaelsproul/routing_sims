@@ -23,10 +23,7 @@
 //! *   Node names are simply random numbers
 //! *   Node leaving and group merging are not simulated
 
-// For now, because lots of stuff isn't implemented yet:
-#![allow(dead_code)]
-
-use std::cmp::{Ordering, min};
+use std::cmp::Ordering;
 use std::mem;
 use std::hash::{Hash, Hasher};
 use std::fmt::{self, Formatter, Binary, Debug};
@@ -152,11 +149,6 @@ impl Prefix {
     pub fn is_compatible(&self, other: Prefix) -> bool {
         let i = self.name.common_prefix(other.name);
         i >= self.bit_count || i >= other.bit_count
-    }
-
-    /// Get the length of the common prefix
-    pub fn common_prefix(&self, name: NN) -> usize {
-        min(self.bit_count, self.name.common_prefix(name))
     }
 
     /// Returns `true` if this is a prefix of the given `name`.
