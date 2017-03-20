@@ -202,7 +202,7 @@ impl ArgProc {
                     simulation to calculate an attack success probability.")
             (@arg quorum_alg: -Q --quorumalg "Quorum algorithm: 'simple' group proportion, \
                     'age' (age and group proportions), 'all' (run both)")
-            (@arg strategy: -S --strategy "Attack targetting strategy: 'none', \
+            (@arg strategy: -S --strategy [MOFO] "Attack targetting strategy: 'none', \
                     'simple' (naive) targetting, 'all'")
         )
             .get_matches();

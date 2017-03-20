@@ -33,6 +33,7 @@ mod args;
 mod quorum;
 mod tools;
 mod attack;
+mod metadata;
 
 use std::cmp::max;
 

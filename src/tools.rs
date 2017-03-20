@@ -25,6 +25,7 @@ use quorum::{Quorum, SimpleQuorum};
 use attack::{AttackStrategy, UntargettedAttack};
 use prob::{prob_disruption, prob_compromise};
 use net::{Network, NoAddRestriction, RestrictOnePerAge};
+use metadata::Metadata;
 
 
 /// First value is probability of disruption, second is probability of compromise.
@@ -146,12 +147,12 @@ impl<'a> Tool for SimStructureTool<'a> {
         // Yes, *attacking* nodes are *good* for this network initialisation!
         net.add_avail(self.args.num_initial + self.args.num_attacking, 0);
         while net.has_avail() {
-            net.do_step::<NoAddRestriction>(&self.args, &mut attack);
+            net.do_step::<NoAddRestriction>(&self.args, &mut attack, false);
         }
         // The above got all available nodes ready for insert, but the last step will have left
         // some pending insert, so do one more step. Note that we can't wait until the queues are
         // empty because background-leaving may result in a constant churn.
-        net.do_step::<NoAddRestriction>(&self.args, &mut attack);
+        net.do_step::<NoAddRestriction>(&self.args, &mut attack, false);
 
         // This isn't quite right, since one group not compromised does
         // tell you _something_ about the distribution of malicious nodes,
@@ -194,19 +195,21 @@ impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
 
     // Run a simulation. Result has either 0 or 1 in each field, `(any_disruption, any_compromise)`.
     fn run_sim(&self) -> SimResult {
-        info!("Starting sim");
         let mut attack = self.attack.clone();
+        let mut metadata = Metadata::new();
 
         // 1. Create an initial network of good nodes.
         let mut net = Network::new(self.args.min_group_size as usize);
         net.add_avail(self.args.num_initial, 0);
         while net.has_avail() {
-            net.do_step::<RestrictOnePerAge>(&self.args, &mut attack);
+            net.do_step::<RestrictOnePerAge>(&self.args, &mut attack, false);
         }
         // The above got all available nodes ready for insert, but the last step will have left
         // some pending insert, so do one more step. Note that we can't wait until the queues are
         // empty because background-leaving may result in a constant churn.
-        net.do_step::<RestrictOnePerAge>(&self.args, &mut attack);
+        net.do_step::<RestrictOnePerAge>(&self.args, &mut attack, false);
+
+        metadata.update(net.groups());
 
         // 2. Start attack
         // In this model, malicious nodes are added once while good nodes can be added
@@ -222,7 +225,8 @@ impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
             net.add_avail(n_new as NN, 0);
             to_add_good -= n_new;
 
-            net.do_step::<RestrictOnePerAge>(&self.args, &mut attack);
+            net.do_step::<RestrictOnePerAge>(&self.args, &mut attack, true);
+            metadata.update(net.groups());
 
             // Finally, we check if disruption or compromise occurred:
             for (_, ref group) in net.groups() {

@@ -250,6 +250,3 @@ impl NodeData {
         self.is_malicious
     }
 }
-
-/// Type of a node
-pub type Node = (NodeName, NodeData);

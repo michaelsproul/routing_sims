@@ -23,7 +23,8 @@
 //! *   Node names are simply random numbers
 //! *   Node leaving and group merging are not simulated
 
-use std::collections::hash_map::{HashMap, Entry};
+use std::collections::hash_map::{HashMap};
+use std::collections::btree_map::{BTreeMap, Entry};
 use std::mem;
 
 use rand::{thread_rng, Rng};
@@ -41,7 +42,7 @@ fn sample_NN() -> NN {
 /// Controls whether a node can get added to a group
 pub trait AddRestriction {
     /// May prevent add operation, for example if the group has too many nodes of this age.
-    fn can_add(_node_data: &NodeData, _group: &HashMap<NodeName, NodeData>) -> bool {
+    fn can_add(_node_data: &NodeData, _group: &Group) -> bool {
         true
     }
 }
@@ -53,7 +54,7 @@ impl AddRestriction for NoAddRestriction {}
 /// Limit the number of nodes of certain ages (currently only ages 0 and 1)
 pub struct RestrictOnePerAge;
 impl AddRestriction for RestrictOnePerAge {
-    fn can_add(node_data: &NodeData, group: &HashMap<NodeName, NodeData>) -> bool {
+    fn can_add(node_data: &NodeData, group: &Group) -> bool {
         let age = node_data.age();
         if age > 1 {
             return true;
@@ -63,7 +64,9 @@ impl AddRestriction for RestrictOnePerAge {
 }
 
 /// A `Group` is a collection of named nodes.
-pub type Group = HashMap<NodeName, NodeData>;
+pub type Group = BTreeMap<NodeName, NodeData>;
+
+pub type Groups = HashMap<Prefix, Group>;
 
 /// A `Network` is a collection of groups.
 ///
@@ -90,7 +93,7 @@ impl Network {
     /// An initial, empty, group is created.
     pub fn new(min_group_size: usize) -> Self {
         let mut groups = HashMap::new();
-        groups.insert(Prefix::new(0, 0), HashMap::new());
+        groups.insert(Prefix::new(0, 0), Group::new());
         Network {
             min_group_size: min_group_size,
             groups: groups,
@@ -119,13 +122,36 @@ impl Network {
     /// Note: if a node has done proof-of-work but its original target group splits, it
     /// simply joins whichever group it would now be in. If a node has done proof of work and
     /// is not accepted due to age restrictions, it is given a new name and must redo work.
-    pub fn do_step<AR: AddRestriction>(&mut self, args: &ToolArgs, attack: &mut AttackStrategy) {
+    pub fn do_step<AR: AddRestriction>(&mut self, args: &ToolArgs, attack: &mut AttackStrategy,
+        allow_join_leave: bool
+    ) {
         self.to_join += args.max_join_rate;
         self.p_leave += args.leave_rate_good;
 
         // Add any nodes which were waiting for proof-of-work to complete
+        self.add_joining_nodes::<AR>(attack);
+
+        // Add new nodes, up to the maximum allowed this step; these do not get inserted until
+        // next step.
+        self.add_new_nodes(attack);
+
+        // only do anything if probability is significant, otherwise accumulate
+        if true {
+            self.remove_nodes_randomly();
+        }
+
+        // Let the attacker do a join-leave attack.
+        if allow_join_leave && false {
+            self.process_join_leave(attack);
+        }
+
+        mem::swap(&mut self.pending_nodes, &mut self.pending_next);
+    }
+
+    pub fn add_joining_nodes<AR: AddRestriction>(&mut self, attack: &mut AttackStrategy) {
         while let Some((node_name, node_data)) = self.pending_nodes.pop() {
             let age = node_data.age();
+
             let opt_moved = match self.add_node::<AR>(node_name, node_data) {
                 Ok(prefix) => {
                     trace!("Added node {} with age {}", node_name, age);
@@ -149,9 +175,9 @@ impl Network {
                 }
             }
         }
+    }
 
-        // Add new nodes, up to the maximum allowed this step; these do not get inserted until
-        // next step.
+    pub fn add_new_nodes(&mut self, attack: &mut AttackStrategy) {
         while self.to_join >= 1.0 {
             self.to_join -= 1.0;
 
@@ -174,6 +200,7 @@ impl Network {
             if is_malicious && attack.reset_on_new_name(self, None, new_name, &data) {
                 // Attacking node resets: let a new one replace it. The only thing which changed is
                 // that self.to_join has been decremented.
+                self.to_join += 1.0;
                 continue;
             }
 
@@ -184,8 +211,9 @@ impl Network {
                 self.avail_good -= 1;
             }
         }
+    }
 
-        // only do anything if probability is significant, otherwise accumulate
+    pub fn remove_nodes_randomly(&mut self) {
         if self.p_leave >= 0.001 {
             let p_leave = self.p_leave;
             let n = self.probabilistic_drop(p_leave) as NN;
@@ -193,12 +221,24 @@ impl Network {
             self.avail_good += n;
             self.p_leave = 0.0;
         }
-
-        mem::swap(&mut self.pending_nodes, &mut self.pending_next);
     }
 
+    pub fn process_join_leave(&mut self, attack: &mut AttackStrategy) {
+        if let Some((prefix, node_name)) = attack.force_to_rejoin(self) {
+            trace!("Evicting {:?} from section {:?} motherfucker!", node_name, prefix);
+            // Only killing honest nodes for now.
+            self.groups.get_mut(&prefix).unwrap().remove(&node_name).unwrap();
+            self.avail_good += 1;
+
+            self.do_merges();
+        }
+    }
+
+    /// -- Network defense methods --
+    pub fn on_lol() {}
+
     /// Access groups
-    pub fn groups(&self) -> &HashMap<Prefix, HashMap<NodeName, NodeData>> {
+    pub fn groups(&self) -> &HashMap<Prefix, BTreeMap<NodeName, NodeData>> {
         &self.groups
     }
 
@@ -243,9 +283,8 @@ impl Network {
     /// Return the number of nodes dropped.
     pub fn probabilistic_drop(&mut self, p: RR) -> usize {
         let thresh = (p * (NN::max_value() as RR)).round() as NN;
-        let mut need_merge = vec![];
         let mut num = 0;
-        for (prefix, ref mut group) in &mut self.groups {
+        for (_, ref mut group) in &mut self.groups {
             let to_remove: Vec<_> = group.iter()
                 .filter_map(|(ref key, ref data)| if !data.is_malicious() && sample_NN() < thresh {
                     Some(**key)
@@ -257,36 +296,57 @@ impl Network {
                 group.remove(&key);
                 num += 1;
             }
-            if group.len() < self.min_group_size {
-                need_merge.push(*prefix);
-            }
         }
 
         // Do any merges needed (after all removals)
-        while let Some(prefix) = need_merge.pop() {
-            if prefix.bit_count() == 0 {
-                // Not enough members in network yet; nothing we can do
-                continue;
-            }
-            let mut group = match self.groups.remove(&prefix) {
-                Some(g) => g,
-                None => {
-                    // we marked it twice and handled it already?
-                    continue;
-                }
-            };
-            let parent = prefix.popped();
-            // Groups are disjoint, so all "compatibles" should be descendents of the new "parent"
-            let compatible_prefixes: Vec<_> =
-                self.groups.keys().filter(|k| k.is_compatible(parent)).cloned().collect();
-            for p in compatible_prefixes {
-                let other_group = self.groups.remove(&p).expect("has group");
-                group.extend(other_group);
-            }
-            self.groups.insert(parent, group);
+        let need_merge = self.need_merge();
+        for prefix in need_merge {
+            self.do_merge(prefix);
         }
 
         num
+    }
+
+    pub fn do_merges(&mut self) {
+        for prefix in self.need_merge() {
+            self.do_merge(prefix);
+        }
+    }
+
+    /// Get all prefixes in need of a merge.
+    pub fn need_merge(&self) -> Vec<Prefix> {
+        let mut result = vec![];
+        for (prefix, group) in &self.groups {
+            if group.len() < self.min_group_size {
+                result.push(*prefix);
+            }
+        }
+        result
+    }
+
+    /// Execute a merge for the given prefix.
+    pub fn do_merge(&mut self, prefix: Prefix) {
+        info!("Merging {:?}", prefix);
+        if prefix.bit_count() == 0 {
+            // Not enough members in network yet; nothing we can do
+            return;
+        }
+        let mut group = match self.groups.remove(&prefix) {
+            Some(g) => g,
+            None => {
+                // we marked it twice and handled it already?
+                return;
+            }
+        };
+        let parent = prefix.popped();
+        // Groups are disjoint, so all "compatibles" should be descendents of the new "parent"
+        let compatible_prefixes: Vec<_> =
+            self.groups.keys().filter(|k| k.is_compatible(parent)).cloned().collect();
+        for p in compatible_prefixes {
+            let other_group = self.groups.remove(&p).expect("has group");
+            group.extend(other_group);
+        }
+        self.groups.insert(parent, group);
     }
 
     /// Check need_split and if true call do_split. Return the prefix matching

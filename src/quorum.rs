@@ -17,10 +17,8 @@
 
 //! Quorum
 
-use std::collections::HashMap;
-
 use {NN, RR};
-use node::{NodeName, NodeData};
+use net::Group;
 
 
 /// Describes the "quorum" algorithm
@@ -37,10 +35,10 @@ pub trait Quorum {
     fn set_quorum_proportion(&mut self, prop: RR);
 
     /// Returns true if there is not a quorum of good nodes in the passed group.
-    fn quorum_disrupted(&self, group: &HashMap<NodeName, NodeData>) -> bool;
+    fn quorum_disrupted(&self, group: &Group) -> bool;
 
     /// Returns true if there is a quorum of bad nodes in the passed group.
-    fn quorum_compromised(&self, group: &HashMap<NodeName, NodeData>) -> bool;
+    fn quorum_compromised(&self, group: &Group) -> bool;
 }
 
 /// Quorum based on simply meeting some minimum proportion of the group.
@@ -69,13 +67,13 @@ impl Quorum for SimpleQuorum {
         self.proportion = prop;
     }
 
-    fn quorum_disrupted(&self, group: &HashMap<NodeName, NodeData>) -> bool {
+    fn quorum_disrupted(&self, group: &Group) -> bool {
         let good = group.iter().filter(|node| !node.1.is_malicious()).count() as RR;
         let all = group.len() as RR;
         good / all < self.proportion
     }
 
-    fn quorum_compromised(&self, group: &HashMap<NodeName, NodeData>) -> bool {
+    fn quorum_compromised(&self, group: &Group) -> bool {
         let bad = group.iter().filter(|node| node.1.is_malicious()).count() as RR;
         let all = group.len() as RR;
         bad / all >= self.proportion
@@ -106,7 +104,7 @@ impl Quorum for AgeQuorum {
         self.proportion = prop;
     }
 
-    fn quorum_disrupted(&self, group: &HashMap<NodeName, NodeData>) -> bool {
+    fn quorum_disrupted(&self, group: &Group) -> bool {
         let n_nodes = group.len() as RR;
         let mut sum_age = 0;
         let mut n_good = 0;
@@ -122,7 +120,7 @@ impl Quorum for AgeQuorum {
         (good_age as RR) / (sum_age as RR) < self.proportion
     }
 
-    fn quorum_compromised(&self, group: &HashMap<NodeName, NodeData>) -> bool {
+    fn quorum_compromised(&self, group: &Group) -> bool {
         let n_nodes = group.len() as RR;
         let mut sum_age = 0;
         let mut n_bad = 0;
