@@ -7,24 +7,21 @@
     src="https://code.jquery.com/jquery-3.2.0.js"
     integrity="sha256-wPFJNIFlVY49B+CuAIrDr932XSb6Jk3J1M22M3E2ylQ="
     crossorigin="anonymous"></script>
-  <!--<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.5.0/Chart.bundle.min.js"></script>-->
 </head>
 <body>
-<div id="basicInfo" style="width:100%;height:100%;"></div>
-<div id="pendingNodes" style="width:100%;height:100%;"></div>
-<div id="sectionSizes" style="width:100%;height:100%;"></div>
-<div id="sectionMal" style="width:100%;height:100%;"></div>
+<div id="basicInfo" style="width:100%;height:100%"></div>
+<div id="pendingNodes" style="width:100%;height:100%"></div>
+<div id="sectionSizes" style="width:100%;height:100%"></div>
+<div id="sectionMal" style="width:100%;height:100%"></div>
 <div id="mostMalicious" style="width:100%;height:100%"></div>
+<div id="nodeAges" style="width:100%;height:100%"></div>
 <script>
 var options = {
   xaxis: {
-    //type: 'log',
     autorange: true
   },
   yaxis: {
     title: "number of sections"
-    //type: 'log',
-    //autorange: true
   },
   yaxis2: {
     title: "number of nodes",
@@ -52,7 +49,7 @@ $.when.apply($, requests).done(function() {
 });
 
 $.getJSON("section_sizes.json").done((data) => {
-  data.map((d) => d.mode = "markers");
+  data.map((d) => { d.mode = "markers"; d.type = "scattergl"; });
   Plotly.plot("sectionSizes", data, {});
 }).fail(() => {
   alert("section sizes failed")
@@ -64,7 +61,7 @@ var sectionMalOpts = {
   }
 };
 $.getJSON("section_mal.json").done((data) => {
-  data.map((d) => d.mode = "markers");
+  data.map((d) => { d.mode = "markers"; d.type = "scattergl" });
   Plotly.plot("sectionMal", data, sectionMalOpts);
 });
 
@@ -74,6 +71,35 @@ $.getJSON("pending_nodes.json").done((data) => {
 
 $.getJSON("most_malicious.json").done((data) => {
   Plotly.plot("mostMalicious", [data], {});
+});
+
+$.getJSON("malicious_node_ages.json").done((data) => {
+  delete data.yaxis;
+  data.type = "histogram2d";
+  data.autobinx = false;
+  data.autobiny = false;
+  data.xbins = {
+    start: -0.5,
+    end: Math.max(...data.x),
+    size: 1
+  };
+  data.ybins = {
+    start: -0.5,
+    end: Math.max(...data.y),
+    size: 1
+  };
+  data.colorscale = [
+    [0, 'rgb(255,255,255)'],
+    [0.7, 'rgb(230, 22, 22)'],
+    [1, 'rgb(10, 56, 191']
+  ];
+
+  var options = {
+    yaxis: {
+      title: "age",
+    }
+  };
+  Plotly.plot("nodeAges", [data], options);
 });
 </script>
 </body>

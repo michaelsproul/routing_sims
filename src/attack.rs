@@ -20,6 +20,7 @@
 use node::{Prefix, NodeName, NodeData};
 use net::{Network, Groups};
 
+const CUTOFF: usize = 6;
 
 /// Determines a few things about how attacks work.
 ///
@@ -67,14 +68,24 @@ impl AttackStrategy for UntargettedAttack {
         net: &Network,
         _old_name: Option<NodeName>,
         new_name: NodeName,
-        _node_data: &NodeData) -> bool {
+        node_data: &NodeData) -> bool {
 
-        let cutoff = 1;
+        if net.avail_malicious > 0 {
+            return false;
+        }
+        /*
+        if node_data.age() >= 2 {
+            return false;
+        }
+        */
+
+        let cutoff = CUTOFF;
 
         let mut most_malicious = most_malicious_groups(net.groups());
-        if most_malicious.len() > cutoff {
-            most_malicious.split_off(cutoff);
+        if most_malicious.len() <= cutoff {
+            return false;
         }
+        most_malicious.split_off(cutoff);
 
         let prefix = net.find_prefix(new_name);
 
@@ -114,25 +125,47 @@ fn select_node_to_evict_ddos(_net: &Network) -> Option<(Prefix, NodeName)> {
 }
 
 fn select_node_to_evict_no_ddos(net: &Network) -> Option<(Prefix, NodeName)> {
+    if net.avail_malicious > 0 {
+        return None;
+    }
+
     let mut groups = most_malicious_groups(net.groups());
+
+    if groups.len() <= CUTOFF {
+        return None;
+    }
+
     groups.reverse();
 
-    for (prefix, fraction) in groups {
-        if fraction > 0.0 && fraction < 0.33 {
-            return net.groups()[&prefix]
-                .iter()
-                .filter_map(|(&name, data)| if data.is_malicious() { Some((prefix, name)) } else { None })
-                .next()
+    let cutoff = groups.len() - CUTOFF;
+
+    for &(prefix, fraction) in &groups[..cutoff] {
+        let node = net.groups()[&prefix]
+            .iter()
+            .filter_map(|(&name, data)| {
+                if data.is_malicious() /*&& data.age() <= 4*/ {
+                    Some((prefix, name))
+                } else {
+                    None
+                }
+            })
+            .next();
+
+        if node.is_some() {
+            return node;
         }
     }
-    //error!("hey why is this happening??");
     None
 }
 
 pub fn most_malicious_groups(groups: &Groups) -> Vec<(Prefix, f64)> {
-    let mut malicious = groups.iter().map(|(&prefix, group)| {
+    let mut malicious = groups.iter().filter_map(|(&prefix, group)| {
         let malicious_count = group.values().filter(|x| x.is_malicious()).count();
-        (prefix, malicious_count as f64 / group.len() as f64)
+        if malicious_count > 0 {
+            Some((prefix, malicious_count as f64 / group.len() as f64))
+        } else {
+            None
+        }
     }).collect::<Vec<_>>();
     malicious.sort_by(|&(_, m1), &(_, ref m2)| m1.partial_cmp(m2).unwrap().reverse());
     malicious

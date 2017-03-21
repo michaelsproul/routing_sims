@@ -59,7 +59,8 @@ impl AddRestriction for RestrictOnePerAge {
         if age > 1 {
             return true;
         }
-        group.values().filter(|data| data.age() == age).count() < 2
+        // Number of existing nodes with this age (which is 0 or 1, must be 0).
+        group.values().filter(|data| data.age() == age).count() == 0
     }
 }
 
@@ -178,6 +179,7 @@ impl Network {
     }
 
     pub fn add_new_nodes(&mut self, attack: &mut AttackStrategy) {
+        let mut malicious_reset = 0;
         while self.to_join >= 1.0 {
             self.to_join -= 1.0;
 
@@ -202,6 +204,8 @@ impl Network {
                 // that self.to_join has been decremented.
                 trace!("Restarting before proof-of-work");
                 // self.to_join += 1.0;
+                //self.avail_malicious -= 1;
+                //malicious_reset += 1;
                 continue;
             }
 
@@ -212,6 +216,8 @@ impl Network {
                 self.avail_good -= 1;
             }
         }
+        trace!("Re-adding {} reset nodes to try hacking again on the next step", malicious_reset);
+        self.avail_malicious += malicious_reset;
     }
 
     // FIXME: churn here?
@@ -242,19 +248,22 @@ impl Network {
     }
 
     pub fn process_join_leave(&mut self, attack: &mut AttackStrategy, allow_ddos: bool) {
-        if let Some((prefix, node_name)) = attack.force_to_rejoin(self, allow_ddos) {
+        let mut new_malicious = 0;
+        while let Some((prefix, node_name)) = attack.force_to_rejoin(self, allow_ddos) {
             trace!("Evicting {:?} from section {:?} motherfucker!", node_name, prefix);
 
             let removed = self.remove_node(prefix, node_name);
 
             if removed.is_malicious() {
-                self.avail_malicious += 1;
+                //self.avail_malicious += 1;
+                new_malicious += 1;
             } else {
                 self.avail_good += 1;
             }
 
             self.do_merges();
         }
+        self.avail_malicious += new_malicious;
     }
 
     /// Access groups
@@ -337,7 +346,7 @@ impl Network {
     pub fn need_merge(&self) -> Vec<Prefix> {
         let mut result = vec![];
         for (prefix, group) in &self.groups {
-            if group.len() < self.min_group_size {
+            if group.len() <= self.min_group_size {
                 result.push(*prefix);
             }
         }

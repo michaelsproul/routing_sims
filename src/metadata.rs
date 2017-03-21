@@ -25,6 +25,7 @@ pub struct Metadata {
     most_malicious: Data<f64>,
     // Nodes to be added at the start of the next step.
     pending_nodes: Data<usize>,
+    node_ages: Data<u32>,
     section_info: SectionInfo,
 }
 
@@ -37,6 +38,7 @@ impl Metadata {
             num_malicious: Data::new("num_malicious", "y2"),
             most_malicious: Data::new("most_malicious", "y"),
             pending_nodes: Data::new("pending_nodes", "y"),
+            node_ages: Data::new("malicious_node_ages", ""),
             section_info: SectionInfo::new(),
         }
     }
@@ -48,14 +50,27 @@ impl Metadata {
         self.num_malicious.add_point(self.step_num, num_malicious_total(groups));
         self.update_most_malicious(groups);
         self.pending_nodes.add_point(self.step_num, net.pending_nodes.len());
+        self.update_malicious_node_ages(groups);
         self.section_info.update(self.step_num, groups);
         self.step_num += 1;
     }
 
     fn update_most_malicious(&mut self, groups: &Groups) {
         let malicious = most_malicious_groups(groups);
-        let (_prefix, frac) = malicious[0];
+        let frac = malicious.first().map(|&(_, frac)| frac).unwrap_or(0.0);
         self.most_malicious.add_point(self.step_num, frac);
+    }
+
+    fn update_malicious_node_ages(&mut self, groups: &Groups) {
+        let node_ages = groups.values().flat_map(|group| {
+            group.values()
+                .filter(|node| node.is_malicious())
+                .map(|node| node.age())
+        });
+
+        for age in node_ages {
+            self.node_ages.add_point(self.step_num, age);
+        }
     }
 }
 
@@ -123,7 +138,10 @@ impl SectionInfo {
             });
 
             section_data.add_point(step_num, group.len());
-            malicious_data.add_point(step_num, num_malicious(group));
+            let num_mal = num_malicious(group);
+            if num_mal > 0 {
+                malicious_data.add_point(step_num, num_mal);
+            }
         }
     }
 }
