@@ -209,7 +209,7 @@ impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
         // empty because background-leaving may result in a constant churn.
         net.do_step::<RestrictOnePerAge>(&self.args, &mut attack, false);
 
-        metadata.update(net.groups());
+        metadata.update(&net);
 
         // 2. Start attack
         // In this model, malicious nodes are added once while good nodes can be added
@@ -219,14 +219,16 @@ impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
 
         let mut disruption = false;
 
+        let allow_join_leave = true;
+
         for _ in 0..self.args.max_steps {
             to_add_good += self.args.add_rate_good;
             let n_new = to_add_good.floor();
             net.add_avail(n_new as NN, 0);
             to_add_good -= n_new;
 
-            net.do_step::<RestrictOnePerAge>(&self.args, &mut attack, true);
-            metadata.update(net.groups());
+            net.do_step::<RestrictOnePerAge>(&self.args, &mut attack, allow_join_leave);
+            metadata.update(&net);
 
             // Finally, we check if disruption or compromise occurred:
             for (_, ref group) in net.groups() {

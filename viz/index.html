@@ -11,7 +11,9 @@
 </head>
 <body>
 <div id="basicInfo" style="width:100%;height:100%;"></div>
+<div id="pendingNodes" style="width:100%;height:100%;"></div>
 <div id="sectionSizes" style="width:100%;height:100%;"></div>
+<div id="sectionMal" style="width:100%;height:100%;"></div>
 <div id="mostMalicious" style="width:100%;height:100%"></div>
 <script>
 var options = {
@@ -52,7 +54,23 @@ $.when.apply($, requests).done(function() {
 $.getJSON("section_sizes.json").done((data) => {
   data.map((d) => d.mode = "markers");
   Plotly.plot("sectionSizes", data, {});
-}).fail(() => alert("oh fuck"));
+}).fail(() => {
+  alert("section sizes failed")
+});
+
+var sectionMalOpts = {
+  yaxis: {
+    title: "number of malicious nodes"
+  }
+};
+$.getJSON("section_mal.json").done((data) => {
+  data.map((d) => d.mode = "markers");
+  Plotly.plot("sectionMal", data, sectionMalOpts);
+});
+
+$.getJSON("pending_nodes.json").done((data) => {
+  Plotly.plot("pendingNodes", [data], {});
+});
 
 $.getJSON("most_malicious.json").done((data) => {
   Plotly.plot("mostMalicious", [data], {});

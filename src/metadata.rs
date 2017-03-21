@@ -1,5 +1,5 @@
 use node::Prefix;
-use net::{Group, Groups};
+use net::{Group, Groups, Network};
 use std::io::{self, Write};
 use std::fs::File;
 use std::path::Path;
@@ -23,6 +23,8 @@ pub struct Metadata {
     num_nodes: Data<usize>,
     num_malicious: Data<usize>,
     most_malicious: Data<f64>,
+    // Nodes to be added at the start of the next step.
+    pending_nodes: Data<usize>,
     section_info: SectionInfo,
 }
 
@@ -34,15 +36,18 @@ impl Metadata {
             num_nodes: Data::new("num_nodes", "y2"),
             num_malicious: Data::new("num_malicious", "y2"),
             most_malicious: Data::new("most_malicious", "y"),
+            pending_nodes: Data::new("pending_nodes", "y"),
             section_info: SectionInfo::new(),
         }
     }
 
-    pub fn update(&mut self, groups: &Groups) {
+    pub fn update(&mut self, net: &Network) {
+        let groups = net.groups();
         self.num_sections.add_point(self.step_num, groups.len());
         self.num_nodes.add_point(self.step_num, count_nodes(groups));
         self.num_malicious.add_point(self.step_num, num_malicious_total(groups));
         self.update_most_malicious(groups);
+        self.pending_nodes.add_point(self.step_num, net.pending_nodes.len());
         self.section_info.update(self.step_num, groups);
         self.step_num += 1;
     }
@@ -114,8 +119,7 @@ impl SectionInfo {
                 Data::new(&data_name, "y")
             });
             let mut malicious_data = self.malicious.entry(*prefix).or_insert_with(|| {
-                let trace_name = data_name.clone() + "_malicious";
-                Data::new(&trace_name, "y")
+                Data::new(&data_name, "y")
             });
 
             section_data.add_point(step_num, group.len());

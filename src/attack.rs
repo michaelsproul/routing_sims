@@ -53,7 +53,7 @@ pub trait AttackStrategy {
         false
     }
 
-    fn force_to_rejoin(&mut self, _net: &Network) -> Option<(Prefix, NodeName)> {
+    fn force_to_rejoin(&mut self, _net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
         None
     }
 }
@@ -69,9 +69,11 @@ impl AttackStrategy for UntargettedAttack {
         new_name: NodeName,
         _node_data: &NodeData) -> bool {
 
+        let cutoff = 1;
+
         let mut most_malicious = most_malicious_groups(net.groups());
-        if most_malicious.len() > 3 {
-            most_malicious.split_off(3);
+        if most_malicious.len() > cutoff {
+            most_malicious.split_off(cutoff);
         }
 
         let prefix = net.find_prefix(new_name);
@@ -84,20 +86,47 @@ impl AttackStrategy for UntargettedAttack {
         }
     }
 
-    fn force_to_rejoin(&mut self, net: &Network) -> Option<(Prefix, NodeName)> {
-        // Find group with the highest fraction of malicious nodes and remove an honest node.
-        let groups = most_malicious_groups(net.groups());
-
-        let (target_prefix, _) = groups[0];
-
-        for (node_name, node_data) in net.groups().get(&target_prefix).unwrap().iter() {
-            if !node_data.is_malicious() {
-                return Some((target_prefix, *node_name));
-            }
+    fn force_to_rejoin(&mut self, net: &Network, allow_ddos: bool) -> Option<(Prefix, NodeName)> {
+        // TODO: inter-section collusion.
+        if allow_ddos {
+            select_node_to_evict_ddos(net)
+        } else {
+            select_node_to_evict_no_ddos(net)
         }
-        error!("yo, this case shouldn't be happening!");
-        None
     }
+}
+
+fn select_node_to_evict_ddos(_net: &Network) -> Option<(Prefix, NodeName)> {
+    /*
+    // Find group with the highest fraction of malicious nodes and remove an honest node.
+    let groups = most_malicious_groups(net.groups());
+
+    let (target_prefix, _) = groups[0];
+
+    for (node_name, node_data) in net.groups().get(&target_prefix).unwrap().iter() {
+        if !node_data.is_malicious() {
+            return Some((target_prefix, *node_name));
+        }
+    }
+    error!("yo, this case shouldn't be happening!");
+    */
+    None
+}
+
+fn select_node_to_evict_no_ddos(net: &Network) -> Option<(Prefix, NodeName)> {
+    let mut groups = most_malicious_groups(net.groups());
+    groups.reverse();
+
+    for (prefix, fraction) in groups {
+        if fraction > 0.0 && fraction < 0.33 {
+            return net.groups()[&prefix]
+                .iter()
+                .filter_map(|(&name, data)| if data.is_malicious() { Some((prefix, name)) } else { None })
+                .next()
+        }
+    }
+    //error!("hey why is this happening??");
+    None
 }
 
 pub fn most_malicious_groups(groups: &Groups) -> Vec<(Prefix, f64)> {

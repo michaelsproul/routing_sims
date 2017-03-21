@@ -51,7 +51,7 @@ pub trait AddRestriction {
 pub struct NoAddRestriction;
 impl AddRestriction for NoAddRestriction {}
 
-/// Limit the number of nodes of certain ages (currently only ages 0 and 1)
+/// Limit the number of nodes of certain ages.
 pub struct RestrictOnePerAge;
 impl AddRestriction for RestrictOnePerAge {
     fn can_add(node_data: &NodeData, group: &Group) -> bool {
@@ -80,11 +80,11 @@ pub struct Network {
     to_join: RR,
     p_leave: RR,
     // Number of new nodes available (good and malicious):
-    avail_good: NN,
-    avail_malicious: NN,
+    pub avail_good: NN,
+    pub avail_malicious: NN,
     // nodes pending joining a group this step, and those joining next step:
-    pending_nodes: Vec<(NodeName, NodeData)>,
-    pending_next: Vec<(NodeName, NodeData)>,
+    pub pending_nodes: Vec<(NodeName, NodeData)>,
+    pub pending_next: Vec<(NodeName, NodeData)>,
 }
 
 impl Network {
@@ -125,6 +125,7 @@ impl Network {
     pub fn do_step<AR: AddRestriction>(&mut self, args: &ToolArgs, attack: &mut AttackStrategy,
         allow_join_leave: bool
     ) {
+        let allow_ddos = false;
         self.to_join += args.max_join_rate;
         self.p_leave += args.leave_rate_good;
 
@@ -136,13 +137,11 @@ impl Network {
         self.add_new_nodes(attack);
 
         // only do anything if probability is significant, otherwise accumulate
-        if true {
-            self.remove_nodes_randomly();
-        }
+        self.remove_nodes_randomly();
 
         // Let the attacker do a join-leave attack.
-        if allow_join_leave && false {
-            self.process_join_leave(attack);
+        if allow_join_leave {
+            self.process_join_leave(attack, allow_ddos);
         }
 
         mem::swap(&mut self.pending_nodes, &mut self.pending_next);
@@ -168,6 +167,7 @@ impl Network {
                 let new_name = new_node_name();
                 if data.is_malicious() &&
                    attack.reset_on_new_name(self, opt_old_name, new_name, &data) {
+                    trace!("Restarting relocated malicious node");
                     // Node resets: drop data, but remember that we need another malicious node
                     self.avail_malicious += 1;
                 } else {
@@ -200,7 +200,8 @@ impl Network {
             if is_malicious && attack.reset_on_new_name(self, None, new_name, &data) {
                 // Attacking node resets: let a new one replace it. The only thing which changed is
                 // that self.to_join has been decremented.
-                self.to_join += 1.0;
+                trace!("Restarting before proof-of-work");
+                // self.to_join += 1.0;
                 continue;
             }
 
@@ -213,6 +214,7 @@ impl Network {
         }
     }
 
+    // FIXME: churn here?
     pub fn remove_nodes_randomly(&mut self) {
         if self.p_leave >= 0.001 {
             let p_leave = self.p_leave;
@@ -223,19 +225,37 @@ impl Network {
         }
     }
 
-    pub fn process_join_leave(&mut self, attack: &mut AttackStrategy) {
-        if let Some((prefix, node_name)) = attack.force_to_rejoin(self) {
+    // Remove a single node from the network permanently (don't use upon relocation).
+    pub fn remove_node(&mut self, prefix: Prefix, node_name: NodeName) -> NodeData {
+        let removed = self.groups.get_mut(&prefix).unwrap().remove(&node_name).unwrap();
+
+        let churn_removed = true;
+
+        if churn_removed {
+            if let Some((_, reloc_data)) = self.churn(prefix, node_name) {
+                let new_name = new_node_name();
+                self.pending_next.push((new_name, reloc_data));
+            }
+        }
+
+        removed
+    }
+
+    pub fn process_join_leave(&mut self, attack: &mut AttackStrategy, allow_ddos: bool) {
+        if let Some((prefix, node_name)) = attack.force_to_rejoin(self, allow_ddos) {
             trace!("Evicting {:?} from section {:?} motherfucker!", node_name, prefix);
-            // Only killing honest nodes for now.
-            self.groups.get_mut(&prefix).unwrap().remove(&node_name).unwrap();
-            self.avail_good += 1;
+
+            let removed = self.remove_node(prefix, node_name);
+
+            if removed.is_malicious() {
+                self.avail_malicious += 1;
+            } else {
+                self.avail_good += 1;
+            }
 
             self.do_merges();
         }
     }
-
-    /// -- Network defense methods --
-    pub fn on_lol() {}
 
     /// Access groups
     pub fn groups(&self) -> &HashMap<Prefix, BTreeMap<NodeName, NodeData>> {
@@ -427,7 +447,7 @@ impl Network {
                 continue;   // skip this node
             }
             if node_data.churn_and_can_age() {
-                if to_relocate.map_or(true, |n| node_data.churns() > n.1) {
+                if to_relocate.map_or(true, |(_, churns)| node_data.churns() > churns) {
                     to_relocate = Some((*node_name, node_data.churns()));
                 }
             }
