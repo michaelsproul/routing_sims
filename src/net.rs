@@ -179,7 +179,7 @@ impl Network {
     }
 
     pub fn add_new_nodes(&mut self, attack: &mut AttackStrategy) {
-        let mut malicious_reset = 0;
+        //let mut malicious_reset = 0;
         while self.to_join >= 1.0 {
             self.to_join -= 1.0;
 
@@ -216,8 +216,8 @@ impl Network {
                 self.avail_good -= 1;
             }
         }
-        trace!("Re-adding {} reset nodes to try hacking again on the next step", malicious_reset);
-        self.avail_malicious += malicious_reset;
+        //trace!("Re-adding {} reset nodes to try hacking again on the next step", malicious_reset);
+        //self.avail_malicious += malicious_reset;
     }
 
     // FIXME: churn here?
@@ -249,7 +249,7 @@ impl Network {
 
     pub fn process_join_leave(&mut self, attack: &mut AttackStrategy, allow_ddos: bool) {
         let mut new_malicious = 0;
-        while let Some((prefix, node_name)) = attack.force_to_rejoin(self, allow_ddos) {
+        if let Some((prefix, node_name)) = attack.force_to_rejoin(self, allow_ddos) {
             trace!("Evicting {:?} from section {:?} motherfucker!", node_name, prefix);
 
             let removed = self.remove_node(prefix, node_name);

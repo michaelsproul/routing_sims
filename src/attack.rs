@@ -18,9 +18,28 @@
 // Attack strategies
 
 use node::{Prefix, NodeName, NodeData};
-use net::{Network, Groups};
+use net::{Network, Groups, Group};
+//use std::collections::BTreeMap;
 
-const CUTOFF: usize = 6;
+// Number of attacking nodes.
+// const ATTACK_SIZE: usize = 100;
+
+// Target number of old nodes.
+const VANGUARD_SIZE: usize = 100;
+
+// Target number of middle-aged nodes.
+const INFANTRY_SIZE: usize = 100;
+
+// Age for a node to be considered old/part of the vanguard.
+const VANGUARD_AGE: u32 = 5;
+
+const INFANTRY_AGE: u32 = 3;
+
+// If a node reaches this age, consider killing it off more aggressively.
+const TOO_OLD: u32 = 8;
+
+// Number of top groups to leave alone during churn.
+// const CUTOFF: u32 = 3;
 
 /// Determines a few things about how attacks work.
 ///
@@ -66,45 +85,118 @@ pub struct UntargettedAttack;
 impl AttackStrategy for UntargettedAttack {
     fn reset_on_new_name(&mut self,
         net: &Network,
-        _old_name: Option<NodeName>,
+        old_name: Option<NodeName>,
         new_name: NodeName,
         node_data: &NodeData) -> bool {
 
-        if net.avail_malicious > 0 {
-            return false;
-        }
-        /*
-        if node_data.age() >= 2 {
-            return false;
-        }
-        */
-
-        let cutoff = CUTOFF;
-
-        let mut most_malicious = most_malicious_groups(net.groups());
-        if most_malicious.len() <= cutoff {
-            return false;
-        }
-        most_malicious.split_off(cutoff);
-
-        let prefix = net.find_prefix(new_name);
-
-        // If node prefix is amongst the most malicious, that's ok.
-        if let Some(_) = most_malicious.iter().map(|&(p, _)| p).find(|x| *x == prefix) {
-            false
+        if old_name.is_none() {
+            // Work out whether to accept this name for this new node.
+            !keep_fodder_name(net, new_name)
         } else {
-            true
+            // Work out whether to keep this node alive now that it's relocating.
+            !accept_relocation(net, new_name, *node_data)
         }
     }
 
     fn force_to_rejoin(&mut self, net: &Network, allow_ddos: bool) -> Option<(Prefix, NodeName)> {
-        // TODO: inter-section collusion.
         if allow_ddos {
+            // TODO: inter-section collusion.
             select_node_to_evict_ddos(net)
         } else {
             select_node_to_evict_no_ddos(net)
         }
     }
+}
+
+fn malicious_nodes(group: &Group) -> Vec<(NodeName, NodeData)> {
+    group.iter()
+        .filter(|&(_, data)| data.is_malicious())
+        .map(|(&name, &data)| (name, data))
+        .collect()
+}
+
+fn num_infantry(nodes: &[(NodeName, NodeData)]) -> usize {
+    nodes.iter()
+        .filter(|&&(_, data)| data.age() >= INFANTRY_AGE && data.age() < VANGUARD_AGE)
+        .count()
+}
+
+fn num_vanguard(nodes: &[(NodeName, NodeData)]) -> usize {
+    nodes.iter()
+        .filter(|&&(_, data)| data.age() >= VANGUARD_AGE)
+        .count()
+}
+
+fn keep_fodder_name(net: &Network, name: NodeName) -> bool {
+    let (total_inf, total_van) = total_infantry_and_vanguard(net.groups());
+    let prefix = net.find_prefix(name);
+    let our_nodes = malicious_nodes(&net.groups()[&prefix]);
+    let new_section_fraction = num_vanguard(&our_nodes) as f64 / net.groups()[&prefix].len() as f64;
+
+    /*
+    if total_inf + total_van < INFANTRY_SIZE + VANGUARD_SIZE {
+        return true;
+    }*/
+
+    // If this node will join an infantry group, keep it.
+    // TODO: check that the group we're joining isn't amongst the best N.
+    if (num_infantry(&our_nodes) >= 1 && new_section_fraction <= 0.50) ||
+       (total_inf < INFANTRY_SIZE && new_section_fraction <= 0.60) {
+        return true;
+    }
+
+    // Otherwise, don't bother.
+    false
+}
+
+fn total_infantry_and_vanguard(groups: &Groups) -> (usize, usize) {
+    groups.values()
+        .map(|group| {
+            let our_nodes = malicious_nodes(group);
+            (num_infantry(&our_nodes), num_vanguard(&our_nodes))
+        })
+        .fold((0, 0), |(x1, y1), (x2, y2)| (x1 + x2, y1 + y2))
+}
+
+fn accept_relocation(net: &Network, name: NodeName, data: NodeData) -> bool {
+    let (total_infantry, total_vanguard) = total_infantry_and_vanguard(net.groups());
+    let prefix = net.find_prefix(name);
+    let our_nodes = malicious_nodes(&net.groups()[&prefix]);
+
+    let new_section_fraction = num_vanguard(&our_nodes) as f64 / net.groups()[&prefix].len() as f64;
+
+    if data.age() >= TOO_OLD {
+        if new_section_fraction >= 0.60 {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    // If node is vanguard and relocated to a crappy section, kill it off.
+    if data.age() >= VANGUARD_AGE {
+        // TODO: consider section fraction relative to best known fractions.
+        if total_vanguard > VANGUARD_SIZE && new_section_fraction <= 0.50 {
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+    if data.age() >= INFANTRY_AGE {
+        // If there are enough infantry and we haven't joined a particularly awesome group,
+        // drop-out.
+        if total_infantry > INFANTRY_SIZE &&
+           num_infantry(&our_nodes) <= 3 &&
+           new_section_fraction <= 0.60 {
+            return false
+        } else {
+            return true;
+        }
+    }
+
+    // Otherwise, if we're a fodder node, keep on churning!
+    true
 }
 
 fn select_node_to_evict_ddos(_net: &Network) -> Option<(Prefix, NodeName)> {
@@ -125,37 +217,38 @@ fn select_node_to_evict_ddos(_net: &Network) -> Option<(Prefix, NodeName)> {
 }
 
 fn select_node_to_evict_no_ddos(net: &Network) -> Option<(Prefix, NodeName)> {
-    if net.avail_malicious > 0 {
+    let (total_inf, total_vanguard) = total_infantry_and_vanguard(net.groups());
+
+    // If we don't have enough established nodes, don't kill any.
+    /*
+    if total_vanguard < VANGUARD_SIZE {
+        return None;
+    }
+    */
+    // TODO: consider killing old nodes in crappy groups.
+
+    // Otherwise kill a fodder node.
+    let mut all_malicious_nodes: Vec<(NodeName, Prefix, NodeData)> = net.groups().iter()
+        .flat_map(|(prefix, group)| {
+            group.iter()
+                .filter(|&(_, data)| data.is_malicious())
+                .map(move |(&name, &data)| (name, *prefix, data))
+        })
+        .collect();
+
+    // If we don't have enough established nodes, don't kill any.
+    if all_malicious_nodes.len() < 50 {
         return None;
     }
 
-    let mut groups = most_malicious_groups(net.groups());
+    all_malicious_nodes.sort_by_key(|&(_, _, data)| data.age());
 
-    if groups.len() <= CUTOFF {
-        return None;
-    }
-
-    groups.reverse();
-
-    let cutoff = groups.len() - CUTOFF;
-
-    for &(prefix, fraction) in &groups[..cutoff] {
-        let node = net.groups()[&prefix]
-            .iter()
-            .filter_map(|(&name, data)| {
-                if data.is_malicious() /*&& data.age() <= 4*/ {
-                    Some((prefix, name))
-                } else {
-                    None
-                }
-            })
-            .next();
-
-        if node.is_some() {
-            return node;
-        }
-    }
-    None
+    all_malicious_nodes
+        .into_iter()
+        .next()
+        .and_then(|(name, prefix, data)| {
+            Some((prefix, name))
+        })
 }
 
 pub fn most_malicious_groups(groups: &Groups) -> Vec<(Prefix, f64)> {

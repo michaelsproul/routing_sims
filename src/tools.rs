@@ -217,6 +217,7 @@ impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
         net.add_avail(0, self.args.num_attacking);
         let mut to_add_good = 0.0;
 
+        let mut compromise = false;
         let mut disruption = false;
 
         let allow_join_leave = true;
@@ -234,15 +235,16 @@ impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
             for (_, ref group) in net.groups() {
                 if self.quorum.quorum_compromised(group) {
                     // Compromise implies disruption!
-                    return SimResult(1.0, 1.0);
+                    //return SimResult(1.0, 1.0);
+                    compromise = true;
+                    disruption = true;
                 } else if self.quorum.quorum_disrupted(group) {
                     disruption = true;
                 }
             }
         }
 
-        // If we didn't return already, no compromise occurred, but disruption may have
-        SimResult(if disruption { 1.0 } else { 0.0 }, 0.0)
+        SimResult(if disruption { 1.0 } else { 0.0 }, if compromise { 1.0 } else { 0.0 })
     }
 }
 
