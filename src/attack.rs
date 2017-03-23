@@ -19,10 +19,10 @@
 
 use node::{Prefix, NodeName, NodeData};
 use net::{Network, Groups, Group};
-//use std::collections::BTreeMap;
+use rand::{thread_rng, Rng};
 
 // Number of attacking nodes.
-// const ATTACK_SIZE: usize = 100;
+const ATTACK_SIZE: usize = 300;
 
 // Target number of old nodes.
 const VANGUARD_SIZE: usize = 100;
@@ -37,6 +37,8 @@ const INFANTRY_AGE: u32 = 3;
 
 // If a node reaches this age, consider killing it off more aggressively.
 const TOO_OLD: u32 = 8;
+
+const YOUNG_CUTOFF: u32 = 3;
 
 // Number of top groups to leave alone during churn.
 // const CUTOFF: u32 = 3;
@@ -128,25 +130,19 @@ fn num_vanguard(nodes: &[(NodeName, NodeData)]) -> usize {
 }
 
 fn keep_fodder_name(net: &Network, name: NodeName) -> bool {
-    let (total_inf, total_van) = total_infantry_and_vanguard(net.groups());
     let prefix = net.find_prefix(name);
-    let our_nodes = malicious_nodes(&net.groups()[&prefix]);
-    let new_section_fraction = num_vanguard(&our_nodes) as f64 / net.groups()[&prefix].len() as f64;
 
-    /*
-    if total_inf + total_van < INFANTRY_SIZE + VANGUARD_SIZE {
-        return true;
-    }*/
+    let most_malicious = most_malicious_groups(net.groups());
 
-    // If this node will join an infantry group, keep it.
-    // TODO: check that the group we're joining isn't amongst the best N.
-    if (num_infantry(&our_nodes) >= 1 && new_section_fraction <= 0.50) ||
-       (total_inf < INFANTRY_SIZE && new_section_fraction <= 0.60) {
+    if most_malicious.len() < 4 {
+        // TODO: ??
         return true;
     }
 
-    // Otherwise, don't bother.
-    false
+    let q3 = most_malicious.len() / 4;
+    let q1 = q3 + most_malicious.len() / 2;
+
+    most_malicious[q3..q1].iter().find(|&&(p, _)| p == prefix).is_some()
 }
 
 fn total_infantry_and_vanguard(groups: &Groups) -> (usize, usize) {
@@ -159,96 +155,56 @@ fn total_infantry_and_vanguard(groups: &Groups) -> (usize, usize) {
 }
 
 fn accept_relocation(net: &Network, name: NodeName, data: NodeData) -> bool {
-    let (total_infantry, total_vanguard) = total_infantry_and_vanguard(net.groups());
     let prefix = net.find_prefix(name);
-    let our_nodes = malicious_nodes(&net.groups()[&prefix]);
 
-    let new_section_fraction = num_vanguard(&our_nodes) as f64 / net.groups()[&prefix].len() as f64;
+    let most_malicious = most_malicious_groups(net.groups());
 
-    if data.age() >= TOO_OLD {
-        if new_section_fraction >= 0.60 {
-            return true;
-        } else {
-            return false;
-        }
+    if most_malicious.len() < 4 {
+        // potentially dodgy
+        return true;
     }
 
-    // If node is vanguard and relocated to a crappy section, kill it off.
-    if data.age() >= VANGUARD_AGE {
-        // TODO: consider section fraction relative to best known fractions.
-        if total_vanguard > VANGUARD_SIZE && new_section_fraction <= 0.50 {
-            return false;
-        } else {
-            return true;
-        }
-    }
+    let q3 = most_malicious.len() / 4;
+    let q2 = most_malicious.len();
+    let q1 = q3 + most_malicious.len() / 2;
+    let top_40 = (4 * most_malicious.len()) / 10;
 
-    if data.age() >= INFANTRY_AGE {
-        // If there are enough infantry and we haven't joined a particularly awesome group,
-        // drop-out.
-        if total_infantry > INFANTRY_SIZE &&
-           num_infantry(&our_nodes) <= 3 &&
-           new_section_fraction <= 0.60 {
-            return false
-        } else {
-            return true;
-        }
+    if data.age() <= YOUNG_CUTOFF {
+        // Keep if in middle 50%.
+        most_malicious[q3..q1].iter().find(|&&(p, _)| p == prefix).is_some()
+    } else if data.age() <= 6 {
+        most_malicious[..q2].iter().find(|&&(p, _)| p == prefix).is_some()
+    } else {
+        most_malicious[..top_40].iter().find(|&&(p, _)| p == prefix).is_some()
     }
-
-    // Otherwise, if we're a fodder node, keep on churning!
-    total_infantry < INFANTRY_SIZE
 }
 
 fn select_node_to_evict_ddos(_net: &Network) -> Option<(Prefix, NodeName)> {
-    /*
-    // Find group with the highest fraction of malicious nodes and remove an honest node.
-    let groups = most_malicious_groups(net.groups());
-
-    let (target_prefix, _) = groups[0];
-
-    for (node_name, node_data) in net.groups().get(&target_prefix).unwrap().iter() {
-        if !node_data.is_malicious() {
-            return Some((target_prefix, *node_name));
-        }
-    }
-    error!("yo, this case shouldn't be happening!");
-    */
     None
 }
 
 fn select_node_to_evict_no_ddos(net: &Network) -> Option<(Prefix, NodeName)> {
-    let (total_inf, total_vanguard) = total_infantry_and_vanguard(net.groups());
+    // Select a young node from amongst the bottom 50% of controlled sections.
+    let mut most_malicious = most_malicious_groups(net.groups());
 
-    // If we don't have enough established nodes, don't kill any.
-    /*
-    if total_vanguard < VANGUARD_SIZE {
-        return None;
-    }
-    */
-    // TODO: consider killing old nodes in crappy groups.
-
-    // Otherwise kill a fodder node.
-    let mut all_malicious_nodes: Vec<(NodeName, Prefix, NodeData)> = net.groups().iter()
-        .flat_map(|(prefix, group)| {
-            group.iter()
-                .filter(|&(_, data)| data.is_malicious())
-                .map(move |(&name, &data)| (name, *prefix, data))
-        })
-        .collect();
-
-    // If we don't have enough established nodes, don't kill any.
-    if all_malicious_nodes.len() < 50 {
+    if most_malicious.len() < 4 {
         return None;
     }
 
-    all_malicious_nodes.sort_by_key(|&(_, _, data)| data.age());
+    let half = most_malicious.len() / 4;
+    let mut bottom_half = most_malicious.split_off(half);
+    let mut rng = thread_rng();
+    rng.shuffle(&mut bottom_half);
 
-    all_malicious_nodes
-        .into_iter()
-        .next()
-        .and_then(|(name, prefix, data)| {
-            Some((prefix, name))
-        })
+    for (prefix, _) in bottom_half {
+        for (&name, data) in &net.groups()[&prefix] {
+            if data.age() <= 5 || true {
+                return Some((prefix, name));
+            }
+        }
+    }
+
+    None
 }
 
 pub fn most_malicious_groups(groups: &Groups) -> Vec<(Prefix, f64)> {
@@ -261,6 +217,9 @@ pub fn most_malicious_groups(groups: &Groups) -> Vec<(Prefix, f64)> {
         }
     }).collect::<Vec<_>>();
     malicious.sort_by(|&(_, m1), &(_, ref m2)| m1.partial_cmp(m2).unwrap().reverse());
+    if malicious.len() >= 2 {
+        assert!(malicious[0].1 >= malicious[1].1, "got the order reversed");
+    }
     malicious
 }
 
