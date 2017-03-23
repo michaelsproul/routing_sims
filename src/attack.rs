@@ -196,7 +196,7 @@ fn accept_relocation(net: &Network, name: NodeName, data: NodeData) -> bool {
     }
 
     // Otherwise, if we're a fodder node, keep on churning!
-    true
+    total_infantry < INFANTRY_SIZE
 }
 
 fn select_node_to_evict_ddos(_net: &Network) -> Option<(Prefix, NodeName)> {
