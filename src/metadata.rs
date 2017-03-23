@@ -23,8 +23,6 @@ pub struct Metadata {
     num_nodes: Data<usize>,
     num_malicious: Data<usize>,
     most_malicious: Data<f64>,
-    // Nodes to be added at the start of the next step.
-    pending_nodes: Data<usize>,
     node_ages: Data<u32>,
     section_info: SectionInfo,
 }
@@ -37,7 +35,6 @@ impl Metadata {
             num_nodes: Data::new("num_nodes", "y2"),
             num_malicious: Data::new("num_malicious", "y2"),
             most_malicious: Data::new("most_malicious", "y"),
-            pending_nodes: Data::new("pending_nodes", "y"),
             node_ages: Data::new("malicious_node_ages", ""),
             section_info: SectionInfo::new(),
         }
@@ -49,7 +46,6 @@ impl Metadata {
         self.num_nodes.add_point(self.step_num, count_nodes(groups));
         self.num_malicious.add_point(self.step_num, num_malicious_total(groups));
         self.update_most_malicious(groups);
-        self.pending_nodes.add_point(self.step_num, net.pending_nodes.len());
         self.update_malicious_node_ages(groups);
         self.section_info.update(self.step_num, groups);
         self.step_num += 1;

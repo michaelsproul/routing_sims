@@ -26,7 +26,7 @@ use std::process;
 use {ToolArgs, NN, RR};
 use tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool, SimResult};
 use quorum::{SimpleQuorum, AgeQuorum};
-use attack::{UntargettedAttack, SimpleTargettedAttack};
+use attack::UntargettedAttack;
 
 
 pub trait DefaultStep<T> {
@@ -340,8 +340,8 @@ same time to complete proof-of-work.
         let at_type = match matches.value_of("strategy") {
             None => vec![AttackType::Untargetted],
             Some("none") => vec![AttackType::Untargetted],
-            Some("simple") => vec![AttackType::SimpleTargetted],
-            Some("all") => vec![AttackType::Untargetted, AttackType::SimpleTargetted],
+            Some("simple") => vec![AttackType::Untargetted],
+            Some("all") => vec![AttackType::Untargetted],
             Some(x) => panic!("unexpected: -T {}", x),
         };
         let mut at_type_iter = at_type.iter();
@@ -501,14 +501,12 @@ impl SimType {
 
 pub enum AttackType {
     Untargetted,
-    SimpleTargetted,
 }
 
 impl AttackType {
     pub fn name(&self) -> &'static str {
         match self {
             &AttackType::Untargetted => "untarg.",
-            &AttackType::SimpleTargetted => "simp_targ",
         }
     }
 }
@@ -619,16 +617,6 @@ impl SimParams {
                             Box::new(FullSimTool::new(&args,
                                                       AgeQuorum::new(),
                                                       UntargettedAttack {}))
-                        }
-                        (false, AttackType::SimpleTargetted) => {
-                            Box::new(FullSimTool::new(&args,
-                                                      SimpleQuorum::new(),
-                                                      SimpleTargettedAttack::new()))
-                        }
-                        (true, AttackType::SimpleTargetted) => {
-                            Box::new(FullSimTool::new(&args,
-                                                      AgeQuorum::new(),
-                                                      SimpleTargettedAttack::new()))
                         }
                     }
                 }

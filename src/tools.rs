@@ -25,6 +25,7 @@ use quorum::{Quorum, SimpleQuorum};
 use attack::{AttackStrategy, UntargettedAttack};
 use prob::{prob_disruption, prob_compromise};
 use net::{Network, NoAddRestriction, RestrictOnePerAge};
+use node::NodeData;
 use metadata::Metadata;
 
 
@@ -200,22 +201,25 @@ impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
 
         // 1. Create an initial network of good nodes.
         let mut net = Network::new(self.args.min_group_size as usize);
-        net.add_avail(self.args.num_initial, 0);
-        while net.has_avail() {
-            net.do_step::<RestrictOnePerAge>(&self.args, &mut attack, false);
-        }
-        // The above got all available nodes ready for insert, but the last step will have left
-        // some pending insert, so do one more step. Note that we can't wait until the queues are
-        // empty because background-leaving may result in a constant churn.
-        net.do_step::<RestrictOnePerAge>(&self.args, &mut attack, false);
-
         metadata.update(&net);
+
+        for i in 0..self.args.num_initial {
+            trace!("adding node: {}", i);
+            net.add_node::<RestrictOnePerAge>(NodeData::new(false));
+            metadata.update(&net);
+        }
+
+        // 2. Join the malicious nodes.
+        for _ in 0..self.args.num_attacking {
+            net.add_node::<RestrictOnePerAge>(NodeData::new(true));
+            metadata.update(&net);
+        }
 
         // 2. Start attack
         // In this model, malicious nodes are added once while good nodes can be added
         // continuously.
-        net.add_avail(0, self.args.num_attacking);
-        let mut to_add_good = 0.0;
+        //net.add_avail(0, self.args.num_attacking);
+        //let mut to_add_good = 0.0;
 
         let mut compromise = false;
         let mut disruption = false;
@@ -223,15 +227,17 @@ impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
         let allow_join_leave = true;
 
         for _ in 0..self.args.max_steps {
+            /*
             to_add_good += self.args.add_rate_good;
             let n_new = to_add_good.floor();
             net.add_avail(n_new as NN, 0);
             to_add_good -= n_new;
+            */
 
             net.do_step::<RestrictOnePerAge>(&self.args, &mut attack, allow_join_leave);
             metadata.update(&net);
 
-            // Finally, we check if disruption or compromise occurred:
+            // Check if disruption or compromise occurred:
             for (_, ref group) in net.groups() {
                 if self.quorum.quorum_compromised(group) {
                     // Compromise implies disruption!

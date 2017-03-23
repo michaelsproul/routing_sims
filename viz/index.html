@@ -10,7 +10,6 @@
 </head>
 <body>
 <div id="basicInfo" style="width:100%;height:100%"></div>
-<div id="pendingNodes" style="width:100%;height:100%"></div>
 <div id="sectionSizes" style="width:100%;height:100%"></div>
 <div id="sectionMal" style="width:100%;height:100%"></div>
 <div id="mostMalicious" style="width:100%;height:100%"></div>
@@ -63,10 +62,6 @@ var sectionMalOpts = {
 $.getJSON("section_mal.json").done((data) => {
   data.map((d) => { d.mode = "markers"; d.type = "scattergl" });
   Plotly.plot("sectionMal", data, sectionMalOpts);
-});
-
-$.getJSON("pending_nodes.json").done((data) => {
-  Plotly.plot("pendingNodes", [data], {});
 });
 
 $.getJSON("most_malicious.json").done((data) => {
