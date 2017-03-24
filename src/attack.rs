@@ -17,8 +17,8 @@
 
 // Attack strategies
 
-use node::{Prefix, NodeName};
-use net::{Network, Groups};
+use node::{Prefix, NodeName, NodeData};
+use net::{Network, Groups, Group};
 use rand::{thread_rng, Rng};
 
 pub trait AttackStrategy {
@@ -28,10 +28,16 @@ pub trait AttackStrategy {
 }
 
 /// Strategy which does not involve any targetting.
-#[derive(Clone)]
-pub struct UntargettedAttack;
+pub type UntargettedAttack =
+    //Random
+    //YoungestFromWorstGroup
+    OldestFromWorstGroup
+;
 
-impl AttackStrategy for UntargettedAttack {
+#[derive(Clone)]
+pub struct Random;
+
+impl AttackStrategy for Random {
     fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
         let malicious_nodes = all_malicious_nodes(net.groups());
         if malicious_nodes.is_empty() {
@@ -56,6 +62,40 @@ fn all_malicious_nodes(groups: &Groups) -> Vec<(Prefix, NodeName)> {
         })
     })
     .collect()
+}
+
+#[derive(Clone)]
+pub struct OldestFromWorstGroup;
+
+impl AttackStrategy for OldestFromWorstGroup {
+    fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
+        let mut most_malicious = most_malicious_groups(net.groups());
+
+        most_malicious.pop().map(|(prefix, _)| {
+            let (name, _) = youngest_nodes(&net.groups()[&prefix]).pop().unwrap();
+            (prefix, name)
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct YoungestFromWorstGroup;
+
+impl AttackStrategy for YoungestFromWorstGroup {
+    fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
+        let mut most_malicious = most_malicious_groups(net.groups());
+
+        most_malicious.pop().map(|(prefix, _)| {
+            let &(name, _) = youngest_nodes(&net.groups()[&prefix]).first().unwrap();
+            (prefix, name)
+        })
+    }
+}
+
+pub fn youngest_nodes(group: &Group) -> Vec<(NodeName, NodeData)> {
+    let mut result = group.iter().map(|(&n, &d)| (n, d)).collect::<Vec<_>>();
+    result.sort_by_key(|&(_, node)| node.age());
+    result
 }
 
 pub fn most_malicious_groups(groups: &Groups) -> Vec<(Prefix, f64)> {
