@@ -1,18 +1,19 @@
 use node::Prefix;
 use net::{Group, Groups, Network};
 use std::io::{self, Write};
-use std::fs::File;
-use std::path::Path;
+use std::fs::{File, create_dir_all};
+use std::path::{Path, PathBuf};
 use rustc_serialize::json::as_json;
 use std::collections::HashMap;
 use attack::most_malicious_groups;
 use rustc_serialize::{Encodable};
 
-#[derive(RustcEncodable)]
+#[derive(RustcEncodable, Clone)]
 pub struct Data<T: Encodable> {
+    dir: PathBuf,
     name: String,
     yaxis: String,
-    write_out: bool,
+    pub write_out: bool,
     x: Vec<usize>,
     y: Vec<T>,
 }
@@ -28,15 +29,16 @@ pub struct Metadata {
 }
 
 impl Metadata {
-    pub fn new() -> Self {
+    pub fn new(run_num: u32) -> Self {
+        let dir = &format!("run{:02}", run_num);
         Metadata {
             step_num: 0,
-            num_sections: Data::new("num_sections", "y"),
-            num_nodes: Data::new("num_nodes", "y2"),
-            num_malicious: Data::new("num_malicious", "y2"),
-            most_malicious: Data::new("most_malicious", "y"),
-            node_ages: Data::new("malicious_node_ages", ""),
-            section_info: SectionInfo::new(),
+            num_sections: Data::new(dir, "num_sections", "y"),
+            num_nodes: Data::new(dir, "num_nodes", "y2"),
+            num_malicious: Data::new(dir, "num_malicious", "y2"),
+            most_malicious: Data::new(dir, "most_malicious", "y"),
+            node_ages: Data::new(dir, "malicious_node_ages", ""),
+            section_info: SectionInfo::new(dir),
         }
     }
 
@@ -81,9 +83,10 @@ impl <T: Encodable> Drop for Data<T> {
 }
 
 impl <T: Encodable> Data<T> {
-    pub fn new(name: &str, yaxis: &str) -> Self {
+    pub fn new(dir: &str, name: &str, yaxis: &str) -> Self {
         Data {
-            name: name.into(),
+            dir: Path::new("viz").join(dir),
+            name: name.to_string(),
             x: vec![],
             y: vec![],
             yaxis: yaxis.into(),
@@ -96,8 +99,8 @@ impl <T: Encodable> Data<T> {
         self.y.push(y);
     }
 
-    pub fn write_out(&self) -> io::Result<()>{
-        let mut f = open_file(&self.name)?;
+    pub fn write_out(&self) -> io::Result<()> {
+        let mut f = open_json_file(&self.dir, &self.name)?;
         write!(f, "{}", as_json(self))
     }
 }
@@ -106,18 +109,16 @@ fn count_nodes(groups: &Groups) -> usize {
     groups.values().map(|group| group.len()).sum()
 }
 
-fn open_file(name: &str) -> io::Result<File> {
-    File::create(Path::new("viz").join(name.to_string() + ".json"))
-}
-
 pub struct SectionInfo {
+    path: PathBuf,
     sections: HashMap<Prefix, Data<usize>>,
     malicious: HashMap<Prefix, Data<usize>>
 }
 
 impl SectionInfo {
-    pub fn new() -> Self {
+    pub fn new(dir: &str) -> Self {
         SectionInfo {
+            path: Path::new("viz").join(dir),
             sections: HashMap::new(),
             malicious: HashMap::new()
         }
@@ -127,10 +128,10 @@ impl SectionInfo {
         for (prefix, group) in groups {
             let data_name = format!("{:?}", prefix).to_lowercase();
             let mut section_data = self.sections.entry(*prefix).or_insert_with(|| {
-                Data::new(&data_name, "y")
+                Data::new("", &data_name, "y")
             });
             let mut malicious_data = self.malicious.entry(*prefix).or_insert_with(|| {
-                Data::new(&data_name, "y")
+                Data::new("", &data_name, "y")
             });
 
             section_data.add_point(step_num, group.len());
@@ -147,8 +148,8 @@ impl Drop for SectionInfo {
         let size_data = extract_data(&mut self.sections);
         let malicious_data = extract_data(&mut self.malicious);
 
-        if let Err(e) = write_out_array("section_sizes", size_data).and(
-                        write_out_array("section_mal", malicious_data)) {
+        if let Err(e) = write_out_array(&self.path, "section_sizes", size_data).and(
+                        write_out_array(&self.path, "section_mal", malicious_data)) {
             println!("Something's fucked: {:?}", e);
         }
     }
@@ -161,8 +162,13 @@ fn extract_data<T: Encodable>(data_map: &mut HashMap<Prefix, Data<T>>) -> Vec<Da
     }).collect()
 }
 
-fn write_out_array<T: Encodable>(name: &str, data: Vec<Data<T>>) -> io::Result<()> {
-    let f = open_file(name)?;
+fn open_json_file(dir: &Path, name: &str) -> io::Result<File> {
+    create_dir_all(dir)?;
+    File::create(dir.join(name.to_string() + ".json"))
+}
+
+fn write_out_array<T: Encodable>(dir: &Path, name: &str, data: Vec<Data<T>>) -> io::Result<()> {
+    let f = open_json_file(dir, name)?;
     write!(&f, "{}", as_json(&data))
 }
 

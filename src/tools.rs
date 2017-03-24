@@ -140,7 +140,7 @@ impl<'a> Tool for SimStructureTool<'a> {
 
     fn calc_p_compromise(&self, _: u32) -> SimResult {
         // We need an "attack" strategy, though we only support one here
-        let mut attack = UntargettedAttack {};
+        let mut attack = UntargettedAttack::default();
 
         // Create a network of good nodes (this tool assumes all nodes are good in the sim then
         // assumes some are bad in subsequent calculations).
@@ -195,9 +195,9 @@ impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
     }
 
     // Run a simulation. Result has either 0 or 1 in each field, `(any_disruption, any_compromise)`.
-    fn run_sim(&self) -> SimResult {
+    fn run_sim(&self, i: u32) -> SimResult {
         let mut attack = self.attack.clone();
-        let mut metadata = Metadata::new();
+        let mut metadata = Metadata::new(i);
 
         // 1. Create an initial network of good nodes.
         let mut net = Network::new(self.args.min_group_size as usize);
@@ -271,7 +271,7 @@ impl<'a, Q: Quorum, A: AttackStrategy + Clone> Tool for FullSimTool<'a, Q, A>
     fn calc_p_compromise(&self, repetitions: u32) -> SimResult {
         let result = (0..repetitions)
             .into_par_iter()
-            .map(|_| self.run_sim())
+            .map(|i| self.run_sim(i))
             .reduce(|| SimResult(0.0, 0.0),
                     |v1, v2| SimResult(v1.0 + v2.0, v1.1 + v2.1));
 

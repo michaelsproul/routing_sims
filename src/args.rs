@@ -611,12 +611,12 @@ impl SimParams {
                         (false, AttackType::Untargetted) => {
                             Box::new(FullSimTool::new(&args,
                                                       SimpleQuorum::new(),
-                                                      UntargettedAttack {}))
+                                                      UntargettedAttack::default()))
                         }
                         (true, AttackType::Untargetted) => {
                             Box::new(FullSimTool::new(&args,
                                                       AgeQuorum::new(),
-                                                      UntargettedAttack {}))
+                                                      UntargettedAttack::default()))
                         }
                     }
                 }

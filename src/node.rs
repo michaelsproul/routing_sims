@@ -29,7 +29,7 @@ use std::hash::{Hash, Hasher};
 use std::fmt::{self, Formatter, Binary, Debug};
 use std::u64;
 
-use rand::{thread_rng, Rng};
+use rand::{weak_rng, XorShiftRng, Rng};
 
 use NN;
 
@@ -201,9 +201,18 @@ impl Debug for Prefix {
 /// Type of a node name
 pub type NodeName = u64;
 
+use std::cell::RefCell;
+thread_local! {
+    static SHITTY_RNG: RefCell<XorShiftRng> = RefCell::new(weak_rng());
+}
+
 /// Generate a new node name
 pub fn new_node_name() -> NodeName {
-    thread_rng().gen()
+    SHITTY_RNG.with(|rng| {
+        rng.borrow_mut().gen()
+    })
+    //use rand::thread_rng;
+    //thread_rng().gen()
 }
 
 /// Data stored for a node
