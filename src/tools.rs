@@ -27,6 +27,7 @@ use prob::{prob_disruption, prob_compromise};
 use net::{Network, NoAddRestriction, RestrictOnePerAge};
 use node::NodeData;
 use metadata::Metadata;
+use std::marker::PhantomData;
 
 
 /// First value is probability of disruption, second is probability of compromise.
@@ -140,7 +141,7 @@ impl<'a> Tool for SimStructureTool<'a> {
 
     fn calc_p_compromise(&self, _: u32) -> SimResult {
         // We need an "attack" strategy, though we only support one here
-        let mut attack = UntargettedAttack::default();
+        let mut attack = UntargettedAttack::create(self.args, 0);
 
         // Create a network of good nodes (this tool assumes all nodes are good in the sim then
         // assumes some are bad in subsequent calculations).
@@ -178,26 +179,25 @@ impl<'a> Tool for SimStructureTool<'a> {
 /// A tool which simulates group operations.
 ///
 /// Can relocate nodes according to the node ageing RFC (roughly).
-pub struct FullSimTool<'a, Q: Quorum, A: AttackStrategy + Clone> {
+pub struct FullSimTool<'a, A: AttackStrategy> {
     args: &'a ToolArgs,
-    quorum: Q,
-    attack: A,
+    quorum: Box<Quorum + Sync>,
+    _phantom: PhantomData<A>,
 }
 
-impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
-    pub fn new(args: &'a ToolArgs, mut quorum: Q, strategy: A) -> Self {
+impl<'a, A: AttackStrategy> FullSimTool<'a, A> {
+    pub fn new(args: &'a ToolArgs, mut quorum: Box<Quorum + Sync>) -> Self {
         quorum.set_quorum_proportion(args.quorum_prop);
         FullSimTool {
             args: args,
             quorum: quorum,
-            attack: strategy,
+            _phantom: PhantomData,
         }
     }
 
     // Run a simulation. Result has either 0 or 1 in each field, `(any_disruption, any_compromise)`.
     fn run_sim(&self, i: u32) -> SimResult {
-        let mut attack = self.attack.clone();
-        attack.set_run_number(i);
+        let mut attack = A::create(self.args, i);
         let mut metadata = Metadata::new(i);
 
         // 1. Create an initial network of good nodes.
@@ -255,9 +255,8 @@ impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
     }
 }
 
-impl<'a, Q: Quorum, A: AttackStrategy + Clone> Tool for FullSimTool<'a, Q, A>
-    where Q: Sync,
-          A: Sync
+impl<'a, A: AttackStrategy> Tool for FullSimTool<'a, A>
+    where A: Sync
 {
     fn print_message(&self) {
         println!("Tool: simulate group operations");

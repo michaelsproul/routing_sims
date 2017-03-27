@@ -25,7 +25,7 @@ use std::process;
 
 use {ToolArgs, NN, RR};
 use tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool, SimResult};
-use quorum::{SimpleQuorum, AgeQuorum};
+use quorum::{SimpleQuorum, AgeQuorum, Quorum};
 use attack::UntargettedAttack;
 
 
@@ -545,16 +545,14 @@ impl SimParams {
                 SimType::FullSim => {
                     // note: FullSimTool is templated on quorum and attack strategy parameters, so
                     // we need to create the whole thing at once (not create parameters first)
-                    match (self.age_quorum, self.targetting) {
-                        (false, AttackType::Untargetted) => {
-                            Box::new(FullSimTool::new(&args,
-                                                      SimpleQuorum::new(),
-                                                      UntargettedAttack::default()))
-                        }
-                        (true, AttackType::Untargetted) => {
-                            Box::new(FullSimTool::new(&args,
-                                                      AgeQuorum::new(),
-                                                      UntargettedAttack::default()))
+                    let quorum: Box<Quorum + Sync> = if self.age_quorum {
+                        Box::new(AgeQuorum::new())
+                    } else {
+                        Box::new(SimpleQuorum::new())
+                    };
+                    match self.targetting {
+                        AttackType::Untargetted => {
+                            Box::new(FullSimTool::<UntargettedAttack>::new(&args, quorum))
                         }
                     }
                 }

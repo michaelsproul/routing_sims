@@ -17,6 +17,7 @@
 
 // Attack strategies
 
+use ToolArgs;
 use node::{Prefix, NodeName, NodeData};
 use net::{Network, Groups, Group};
 use rand::{weak_rng, XorShiftRng, Rng};
@@ -33,19 +34,19 @@ const BUCKET_SIZE: f64 = 10.0;
 const CHURN_ROUNDING: u32 = 1;
 
 pub trait AttackStrategy {
+    fn create(_params: &ToolArgs, _run_num: u32) -> Self where Self: Sized;
+
     fn force_to_rejoin(&mut self, _net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
         None
     }
-
-    fn set_run_number(&mut self, _run_num: u32) {}
 }
 
 /// Strategy which does not involve any targetting.
 pub type UntargettedAttack =
-    //Random
+    Random
     //YoungestFromWorstGroup
     //OldestFromWorstGroup
-    QLearningAttack
+    //QLearningAttack
 ;
 
 #[derive(Clone)]
@@ -53,11 +54,13 @@ pub struct Random {
     rng: XorShiftRng,
 }
 
-impl Default for Random {
-    fn default() -> Self { Random { rng: weak_rng() } }
-}
-
 impl AttackStrategy for Random {
+    fn create(_: &ToolArgs, _: u32) -> Self {
+        Random {
+            rng: weak_rng()
+        }
+    }
+
     fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
         let malicious_nodes = all_malicious_nodes(net.groups());
         if malicious_nodes.is_empty() {
@@ -87,6 +90,10 @@ fn all_malicious_nodes(groups: &Groups) -> Vec<(Prefix, NodeName)> {
 pub struct OldestFromWorstGroup;
 
 impl AttackStrategy for OldestFromWorstGroup {
+    fn create(_: &ToolArgs, _: u32) -> Self {
+        OldestFromWorstGroup
+    }
+
     fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
         let mut most_malicious = most_malicious_groups(net.groups());
 
@@ -101,6 +108,10 @@ impl AttackStrategy for OldestFromWorstGroup {
 pub struct YoungestFromWorstGroup;
 
 impl AttackStrategy for YoungestFromWorstGroup {
+    fn create(_: &ToolArgs, _: u32) -> Self {
+        YoungestFromWorstGroup
+    }
+
     fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
         let mut most_malicious = most_malicious_groups(net.groups());
 
@@ -164,10 +175,9 @@ struct State {
     neighbour_fraction: u32,
 }
 
-impl Default for QLearningAttack {
-    fn default() -> Self {
-        let mut data = Data::new("", "qlearn_stats", "y");
-        data.write_out = false;
+impl AttackStrategy for QLearningAttack {
+    fn create(_args: &ToolArgs, run_num: u32) -> Self {
+        let data = Data::new(&format!("run{:02}", run_num), "qlearn_stats", "y");
         QLearningAttack {
             q: HashMap::new(),
             prev_action: None,
@@ -176,22 +186,6 @@ impl Default for QLearningAttack {
             states_explored: 0,
             step: 0,
         }
-    }
-}
-
-/*
-use std::cell::RefCell;
-thread_local! {
-    static SHITTY_RNG: RefCell<XorShiftRng> = RefCell::new(weak_rng());
-}
-*/
-
-impl AttackStrategy for QLearningAttack {
-    // FIXME: this is a hack
-    fn set_run_number(&mut self, run_num: u32) {
-        use std::path::Path;
-        self.stats.dir = Path::new("viz").join(format!("run{:02}", run_num));
-        self.stats.write_out = true;
     }
 
     fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
@@ -263,15 +257,6 @@ impl AttackStrategy for QLearningAttack {
         result
     }
 }
-
-/*
-pub fn malicious_fraction(groups: &Groups) -> f64 {
-    malicious_groups(groups).into_iter()
-        .map(|(_, f)| f)
-        .max_by(|x, y| x.partial_cmp(y).unwrap())
-        .unwrap()
-}
-*/
 
 pub fn malicious_fractions(groups: &Groups, n: usize) -> Vec<f64> {
     most_malicious_groups(groups).into_iter()
