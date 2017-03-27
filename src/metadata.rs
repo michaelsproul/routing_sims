@@ -10,7 +10,7 @@ use rustc_serialize::{Encodable};
 
 #[derive(RustcEncodable, Clone)]
 pub struct Data<T: Encodable> {
-    dir: PathBuf,
+    pub dir: PathBuf,
     name: String,
     yaxis: String,
     pub write_out: bool,

@@ -102,7 +102,7 @@ $.getJSON("malicious_node_ages.json").done((data) => {
   Plotly.plot("nodeAges", [data], options);
 });
 
-$.getJSON("qlearn/stats.json").done((data) => {
+$.getJSON("qlearn_stats.json").done((data) => {
   Plotly.plot("attack", [data], {});
 });
 </script>

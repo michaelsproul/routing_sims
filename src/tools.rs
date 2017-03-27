@@ -197,6 +197,7 @@ impl<'a, Q: Quorum, A: AttackStrategy + Clone> FullSimTool<'a, Q, A> {
     // Run a simulation. Result has either 0 or 1 in each field, `(any_disruption, any_compromise)`.
     fn run_sim(&self, i: u32) -> SimResult {
         let mut attack = self.attack.clone();
+        attack.set_run_number(i);
         let mut metadata = Metadata::new(i);
 
         // 1. Create an initial network of good nodes.

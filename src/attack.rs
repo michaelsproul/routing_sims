@@ -23,13 +23,21 @@ use rand::{weak_rng, XorShiftRng, Rng};
 use std::collections::HashMap;
 use metadata::Data;
 
+// TODO: optimise over these parameters.
 const LEARNING_RATE: f64 = 0.5;
-const DISCOUNT_FACTOR: f64 = 1.0;
+const DISCOUNT_FACTOR: f64 = 0.8;
+const GROUP_FOCUS: usize = 1;
+const INIT_QUALITY: f64 = 2.0;
+// Size of buckets that malicious fractions are divided into.
+const BUCKET_SIZE: f64 = 10.0;
+const CHURN_ROUNDING: u32 = 1;
 
 pub trait AttackStrategy {
     fn force_to_rejoin(&mut self, _net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
         None
     }
+
+    fn set_run_number(&mut self, _run_num: u32) {}
 }
 
 /// Strategy which does not involve any targetting.
@@ -131,80 +139,114 @@ pub fn most_malicious_groups(groups: &Groups) -> Vec<(Prefix, f64)> {
 
 #[derive(Clone)]
 pub struct QLearningAttack {
-    // Map (age, churns, fraction of group as int/100, group size) => quality
-    q: HashMap<(u32, u32, u32, usize), f64>,
-    last_action: Option<(u32, u32, u32, usize)>,
-    last_fraction: f64,
-    stats: Data<usize>,
+    q: HashMap<State, f64>,
+    // Action taken on the step previous to `force_to_rejoin` being called.
+    prev_action: Option<State>,
+    // Malicious fraction(s) for previous step.
+    prev_fraction: f64,
+    pub stats: Data<usize>,
+    states_explored: usize,
     step: usize,
+}
+
+// Compression of (state, action) pairs into essential information.
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+struct State {
+    // Age of the node that we could choose to rejoin.
+    age: u32,
+    // Number of churns the potential evictee has endured.
+    churns: u32,
+    // Malicious fraction of the group that the evictee is part of.
+    mal_fraction: u32,
+    // Size of evictee's group (so we can beware of merges).
+    group_size: usize,
+    // Max mal fraction of a neighbouring group (so we don't merge badly).
+    neighbour_fraction: u32,
 }
 
 impl Default for QLearningAttack {
     fn default() -> Self {
-        let mut data = Data::new("qlearn", "stats", "y");
+        let mut data = Data::new("", "qlearn_stats", "y");
         data.write_out = false;
         QLearningAttack {
             q: HashMap::new(),
-            last_action: None,
-            last_fraction: 0.0,
+            prev_action: None,
+            prev_fraction: 0.0,
             stats: data,
+            states_explored: 0,
             step: 0,
         }
     }
 }
 
+/*
 use std::cell::RefCell;
 thread_local! {
     static SHITTY_RNG: RefCell<XorShiftRng> = RefCell::new(weak_rng());
 }
+*/
 
 impl AttackStrategy for QLearningAttack {
+    // FIXME: this is a hack
+    fn set_run_number(&mut self, run_num: u32) {
+        use std::path::Path;
+        self.stats.dir = Path::new("viz").join(format!("run{:02}", run_num));
+        self.stats.write_out = true;
+    }
+
     fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
         // Choose an action to take next (a node to rejoin).
         // This incidentally computes max{a} Q(s_{t + 1}, a) in result_quality.
         let malicious_node_idx = all_malicious_nodes(net.groups());
         let mut result = None;
         let mut result_quality = 0.0;
-
-        let mut wat = 0;
-
-        self.stats.write_out = true;
+        let mut result_action = None;
+        let mut new_state = false;
 
         for (prefix, node_name) in malicious_node_idx {
             let group = &net.groups()[&prefix];
             let node_data = &group[&node_name];
 
-            let age = node_data.age();
-            let churns = node_data.churns();
-            let percentage = int_percent(group);
-            let group_size = group.len();
+            let id = State {
+                age: node_data.age(),
+                churns: (node_data.churns() / CHURN_ROUNDING) * CHURN_ROUNDING,
+                mal_fraction: int_percent(group),
+                group_size: group.len(),
+                neighbour_fraction: compute_neighbour_fraction(prefix, net.groups()),
+            };
 
-            let id = (age, churns, percentage, group_size);
-
-            let quality = *self.q.entry(id).or_insert_with(|| {
-                wat += 1;
-                //thread_rng().next_f64()
-                //SHITTY_RNG.with(|rng| rng.borrow_mut().next_f64())
-                0.8
+            let mut new_state_this_iter = false;
+            let quality = *self.q.entry(id.clone()).or_insert_with(|| {
+                new_state_this_iter = true;
+                INIT_QUALITY
             });
 
             if quality > result_quality {
                 result = Some((prefix, node_name));
                 result_quality = quality;
-                self.last_action = Some(id);
+                result_action = Some(id);
+                new_state = new_state_this_iter;
             }
         }
 
-        self.stats.add_point(self.step, wat);
+        if new_state {
+            self.states_explored += 1;
+        }
+
+        self.stats.add_point(self.step, self.states_explored);
         self.step += 1;
+
+        // Update prev action.
+        let previous_action = self.prev_action.take();
+        self.prev_action = result_action;
 
         // Extract reward for previous time-step from net.
         // Update q.
-        if let Some(action) = self.last_action {
-            //let new_fraction = malicious_fraction(net.groups());
-            // let r = new_fraction; //- self.last_fraction;
-            let r: f64 = malicious_fractions(net.groups(), 5).into_iter().sum();
-            //self.last_fraction = new_fraction;
+        if let Some(action) = previous_action {
+            // TODO: determine whether differential or cumulative rewards work better...
+            let new_frac: f64 = malicious_fractions(net.groups(), GROUP_FOCUS).into_iter().sum();
+            let r = new_frac; // - self.prev_fraction;
+            self.prev_fraction = new_frac;
 
             let old_value = self.q[&action];
             let opt_future_est = result_quality;
@@ -222,12 +264,14 @@ impl AttackStrategy for QLearningAttack {
     }
 }
 
+/*
 pub fn malicious_fraction(groups: &Groups) -> f64 {
     malicious_groups(groups).into_iter()
         .map(|(_, f)| f)
         .max_by(|x, y| x.partial_cmp(y).unwrap())
         .unwrap()
 }
+*/
 
 pub fn malicious_fractions(groups: &Groups, n: usize) -> Vec<f64> {
     most_malicious_groups(groups).into_iter()
@@ -236,9 +280,24 @@ pub fn malicious_fractions(groups: &Groups, n: usize) -> Vec<f64> {
         .collect()
 }
 
+pub fn compute_neighbour_fraction(our_prefix: Prefix, groups: &Groups) -> u32 {
+    let parent_prefix = our_prefix.popped();
+    let neighbour_prefix = if parent_prefix.pushed(true) == our_prefix {
+        parent_prefix.pushed(false)
+    } else {
+        parent_prefix.pushed(true)
+    };
+
+    groups.iter()
+        .filter(|&(&prefix, _)| neighbour_prefix.is_prefix_of(prefix))
+        .map(|(_, ref group)| int_percent(group))
+        .max()
+        .unwrap()
+}
+
 pub fn int_percent(group: &Group) -> u32 {
     let num_malicious = group.values().filter(|d| d.is_malicious()).count();
     let frac = num_malicious as f64 / group.len() as f64;
-    let rounded = (10.0 * frac).round();
+    let rounded = (BUCKET_SIZE * frac).round();
     rounded as u32
 }

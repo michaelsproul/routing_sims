@@ -151,6 +151,12 @@ impl Prefix {
         i >= self.bit_count || i >= other.bit_count
     }
 
+    /// Returns `true` if `self` is a prefix of `other`.
+    pub fn is_prefix_of(&self, other: Prefix) -> bool {
+        let i = self.name.common_prefix(other.name);
+        i >= self.bit_count
+    }
+
     /// Returns `true` if this is a prefix of the given `name`.
     pub fn matches(&self, name: NN) -> bool {
         self.name.common_prefix(name) >= self.bit_count
