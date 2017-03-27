@@ -41,6 +41,7 @@ use rayon::prelude::*;
 use rayon::par_iter::collect::collect_into;
 
 use args::{ArgProc, SimParams, RelOrAbs};
+use attack::QLearningParams;
 
 
 // We could use templating but there's no reason not to do the easy thing and
@@ -73,6 +74,7 @@ pub struct ToolArgs {
     min_group_size: NN,
     quorum_prop: RR,
     max_steps: NN,
+    qlearning: QLearningParams,
 }
 
 impl ToolArgs {
@@ -112,6 +114,7 @@ impl ToolArgs {
             min_group_size: params.min_group_size,
             quorum_prop: params.quorum_prop,
             max_steps: (params.max_days / step_len).round() as NN,
+            qlearning: params.qlearning.clone(),
         }
     }
 }

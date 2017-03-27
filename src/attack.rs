@@ -32,14 +32,6 @@ pub trait AttackStrategy {
     }
 }
 
-/// Strategy which does not involve any targetting.
-pub type UntargettedAttack =
-    Random
-    //YoungestFromWorstGroup
-    //OldestFromWorstGroup
-    //QLearningAttack
-;
-
 #[derive(Clone)]
 pub struct Random {
     rng: XorShiftRng,
@@ -155,12 +147,12 @@ pub struct QLearningAttack {
 #[derive(Clone)]
 // TODO: optimise over these parameters.
 pub struct QLearningParams {
-    learning_rate: f64,
-    discount_factor: f64,
-    group_focus: usize,
-    init_quality: f64,
-    bucket_size: f64,
-    churn_rounding: u32,
+    pub learning_rate: f64,
+    pub discount_factor: f64,
+    pub group_focus: u64,
+    pub init_quality: f64,
+    pub bucket_size: f64,
+    pub churn_rounding: u32,
 }
 
 impl Default for QLearningParams {
@@ -192,7 +184,7 @@ struct State {
 }
 
 impl AttackStrategy for QLearningAttack {
-    fn create(_args: &ToolArgs, run_num: u32) -> Self {
+    fn create(args: &ToolArgs, run_num: u32) -> Self {
         let data = Data::new(&format!("run{:02}", run_num), "qlearn_stats", "y");
         QLearningAttack {
             q: HashMap::new(),
@@ -201,7 +193,7 @@ impl AttackStrategy for QLearningAttack {
             stats: data,
             states_explored: 0,
             step: 0,
-            params: QLearningParams::default(),
+            params: args.qlearning.clone(),
         }
     }
 
@@ -280,10 +272,10 @@ impl AttackStrategy for QLearningAttack {
     }
 }
 
-pub fn malicious_fractions(groups: &Groups, n: usize) -> Vec<f64> {
+pub fn malicious_fractions(groups: &Groups, n: u64) -> Vec<f64> {
     most_malicious_groups(groups).into_iter()
         .map(|(_, frac)| frac)
-        .take(n)
+        .take(n as usize)
         .collect()
 }
 

@@ -22,7 +22,7 @@ use rayon::prelude::*;
 
 use {NN, RR, ToolArgs};
 use quorum::{Quorum, SimpleQuorum};
-use attack::{AttackStrategy, UntargettedAttack};
+use attack::{AttackStrategy, Random};
 use prob::{prob_disruption, prob_compromise};
 use net::{Network, NoAddRestriction, RestrictOnePerAge};
 use node::NodeData;
@@ -141,7 +141,7 @@ impl<'a> Tool for SimStructureTool<'a> {
 
     fn calc_p_compromise(&self, _: u32) -> SimResult {
         // We need an "attack" strategy, though we only support one here
-        let mut attack = UntargettedAttack::create(self.args, 0);
+        let mut attack = Random::create(self.args, 0);
 
         // Create a network of good nodes (this tool assumes all nodes are good in the sim then
         // assumes some are bad in subsequent calculations).

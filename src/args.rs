@@ -23,10 +23,12 @@ use std::ops::AddAssign;
 use std::cmp::Ordering;
 use std::process;
 
+use clap::ArgMatches;
 use {ToolArgs, NN, RR};
 use tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool, SimResult};
 use quorum::{SimpleQuorum, AgeQuorum, Quorum};
-use attack::{Random, YoungestFromWorstGroup, OldestFromWorstGroup, QLearningAttack};
+use attack::{Random, YoungestFromWorstGroup, OldestFromWorstGroup, QLearningAttack,
+             QLearningParams};
 
 
 pub trait DefaultStep<T> {
@@ -200,10 +202,15 @@ impl ArgProc {
                     (days).")
             (@arg repetitions: -p --repetitions [NUM] "Number of times to repeat a true/false \
                     simulation to calculate an attack success probability.")
-            (@arg quorum_alg: -Q --quorumalg "Quorum algorithm: 'simple' group proportion, \
+            (@arg quorum_alg: -Q --quorumalg [ALG] "Quorum algorithm: 'simple' group proportion, \
                     'age' (age and group proportions), 'all' (run both)")
             (@arg strategy: -S --strategy [STRATEGY] "Attack targetting strategy: 'none', \
                     'simple' (naive) targetting, 'all'")
+            (@arg learning_rate: --learningrate [RATE] "Learning rate param for Q-learning")
+            (@arg discount_factor: --discountfactor [FACTOR] "Discount factor for Q-learning")
+            (@arg group_focus: --groupfocus [FOCUS] "Number of groups to target")
+            (@arg init_quality: --initquality [QUALITY] "Value assigned to unexplored actions")
+            (@arg bucket_size: --bucketsize [SIZE] "Number of buckets for quantising malicious section fractions")
         )
             .get_matches();
 
@@ -350,6 +357,22 @@ same time to complete proof-of-work.
         };
         let mut at_type_iter = at_type.into_iter();
 
+        // Q-learning magic.
+        let qlr = parse_sp(&matches, "learning_rate", 0.5f64);
+        let mut q_learning_rate_iter = qlr.iter();
+
+        let qdf = parse_sp(&matches, "discount_factor", 0.8f64);
+        let mut q_discount_factor_iter = qdf.iter();
+
+        let qgf = parse_sp(&matches, "group_focus", 3);
+        let mut q_group_focus_iter = qgf.iter();
+
+        let qiq = parse_sp(&matches, "init_quality", 2.0f64);
+        let mut q_init_quality_iter = qiq.iter();
+
+        let qbs = parse_sp(&matches, "bucket_size", 10.0f64);
+        let mut q_bucket_size_iter = qbs.iter();
+
         let mut v = vec![SimParams {
                              sim_type: tool,
                              num_initial: nodes_iter.next().expect("first iter item"),
@@ -363,6 +386,14 @@ same time to complete proof-of-work.
                              max_days: max_days_iter.next().expect("first iter item"),
                              age_quorum: q_use_age_iter.next().expect("first iter item"),
                              targetting: at_type_iter.next().expect("first iter item"),
+                             qlearning: QLearningParams {
+                                 learning_rate: q_learning_rate_iter.next().unwrap(),
+                                 discount_factor: q_discount_factor_iter.next().unwrap(),
+                                 group_focus: q_group_focus_iter.next().unwrap(),
+                                 init_quality: q_init_quality_iter.next().unwrap(),
+                                 bucket_size: q_bucket_size_iter.next().unwrap(),
+                                 .. QLearningParams::default()
+                             }
                          }];
 
         // TODO: check we're not going to cause out-of-memory here!
@@ -397,11 +428,29 @@ same time to complete proof-of-work.
         // Replicate for all attack strategies
         cartesian_product(&mut v, at_type_iter, |p| &mut p.targetting);
 
+        // Q-learning.
+        cartesian_product(&mut v, q_learning_rate_iter, |p| &mut p.qlearning.learning_rate);
+        cartesian_product(&mut v, q_discount_factor_iter, |p| &mut p.qlearning.discount_factor);
+        cartesian_product(&mut v, q_group_focus_iter, |p| &mut p.qlearning.group_focus);
+        cartesian_product(&mut v, q_init_quality_iter, |p| &mut p.qlearning.init_quality);
+        cartesian_product(&mut v, q_bucket_size_iter, |p| &mut p.qlearning.bucket_size);
+
         let repetitions = matches.value_of("repetitions")
             .map(|s| s.parse().expect("parse"))
             .unwrap_or(100);
         (repetitions, v)
     }
+}
+
+fn parse_sp<T>(
+    matches: &ArgMatches,
+    param_name: &str,
+    default: T) -> SamplePoints<T>
+    where T: FromStr,
+          <T as FromStr>::Err: Debug
+{
+    matches.value_of(param_name)
+        .map_or(SamplePoints::Number(default), |s| s.parse().expect("parse"))
 }
 
 /// Mutate the vec of simulation parameters such that every value returned by `iter` is used
@@ -541,6 +590,7 @@ pub struct SimParams {
     pub quorum_prop: RR,
     pub proof_time: RR,
     pub max_days: RR,
+    pub qlearning: QLearningParams,
 }
 
 impl SimParams {
