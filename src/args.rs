@@ -335,7 +335,7 @@ same time to complete proof-of-work.
             Some("all") => vec![false, true],
             Some(x) => panic!("unexpected: -Q {}", x),
         };
-        let mut q_use_age_iter = q_use_age.iter();
+        let mut q_use_age_iter = q_use_age.into_iter();
 
         let at_type = match matches.value_of("strategy") {
             None => vec![AttackType::Untargetted],
@@ -344,7 +344,7 @@ same time to complete proof-of-work.
             Some("all") => vec![AttackType::Untargetted],
             Some(x) => panic!("unexpected: -T {}", x),
         };
-        let mut at_type_iter = at_type.iter();
+        let mut at_type_iter = at_type.into_iter();
 
         let mut v = vec![SimParams {
                              sim_type: tool,
@@ -357,126 +357,64 @@ same time to complete proof-of-work.
                              quorum_prop: quorum_iter.next().expect("first iter item"),
                              proof_time: proof_time_iter.next().expect("first iter item"),
                              max_days: max_days_iter.next().expect("first iter item"),
-                             age_quorum: *q_use_age_iter.next().expect("first iter item"),
-                             targetting: *at_type_iter.next().expect("first iter item"),
+                             age_quorum: q_use_age_iter.next().expect("first iter item"),
+                             targetting: at_type_iter.next().expect("first iter item"),
                          }];
 
         // TODO: check we're not going to cause out-of-memory here!
 
         // Replicate for all network sizes (num nodes)
-        let range = 0..v.len();
-        for n in nodes_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.num_initial = n;
-                v.push(s);
-            }
-        }
+        cartesian_product(&mut v, nodes_iter, |p| &mut p.num_initial);
 
         // Replicate for all numbers of malicious nodes
-        let range = 0..v.len();
-        for r in at_nodes_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.num_attacking = r;
-                v.push(s);
-            }
-        }
+        cartesian_product(&mut v, at_nodes_iter, |p| &mut p.num_attacking);
 
         // Replicate for all join rates of good nodes
-        let range = 0..v.len();
-        for x in max_join_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.max_join = x;
-                v.push(s);
-            }
-        }
+        cartesian_product(&mut v, max_join_iter, |p| &mut p.max_join);
 
         // Replicate for all leave rates of good nodes
-        let range = 0..v.len();
-        for x in add_good_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.add_good = x;
-                v.push(s);
-            }
-        }
-
-        // Replicate for all leave rates of good nodes
-        let range = 0..v.len();
-        for x in leave_good_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.leave_good = x;
-                v.push(s);
-            }
-        }
+        cartesian_product(&mut v, add_good_iter, |p| &mut p.add_good);
 
         // Replicate for all group sizes
-        let range = 0..v.len();
-        for g in group_size_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.min_group_size = g;
-                v.push(s);
-            }
-        }
+        cartesian_product(&mut v, group_size_iter, |p| &mut p.min_group_size);
 
         // Replicate for all quorum sizes
-        let range = 0..v.len();
-        for q in quorum_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.quorum_prop = q;
-                v.push(s);
-            }
-        }
+        cartesian_product(&mut v, quorum_iter, |p| &mut p.quorum_prop);
 
         // Replicate for all proof-of-work times
-        let range = 0..v.len();
-        for x in proof_time_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.proof_time = x;
-                v.push(s);
-            }
-        }
+        cartesian_product(&mut v, proof_time_iter, |p| &mut p.proof_time);
 
         // Replicate for all max days
-        let range = 0..v.len();
-        for x in max_days_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.max_days = x;
-                v.push(s);
-            }
-        }
+        cartesian_product(&mut v, max_days_iter, |p| &mut p.max_days);
 
         // Replicate for all quorum types
-        let range = 0..v.len();
-        for q in q_use_age_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.age_quorum = *q;
-                v.push(s);
-            }
-        }
+        cartesian_product(&mut v, q_use_age_iter, |p| &mut p.age_quorum);
 
         // Replicate for all attack strategies
-        let range = 0..v.len();
-        for at in at_type_iter {
-            for i in range.clone() {
-                let mut s = v[i].clone();
-                s.targetting = *at;
-                v.push(s);
-            }
-        }
+        cartesian_product(&mut v, at_type_iter, |p| &mut p.targetting);
 
         let repetitions = matches.value_of("repetitions")
             .map(|s| s.parse().expect("parse"))
             .unwrap_or(100);
         (repetitions, v)
+    }
+}
+
+/// Mutate the vec of simulation parameters such that every value returned by `iter` is used
+/// as a value for the field returned by `field_func`.
+/// Yes this is a crazy function...
+fn cartesian_product<T, F, I>(params: &mut Vec<SimParams>, iter: I, field_func: F)
+    where I: Iterator<Item=T>,
+          F: Fn(&mut SimParams) -> &mut T,
+          T: Copy
+{
+    let range = 0..params.len();
+    for value in iter {
+        for i in range.clone() {
+            let mut new_param = params[i].clone();
+            *field_func(&mut new_param) = value;
+            params.push(new_param);
+        }
     }
 }
 
