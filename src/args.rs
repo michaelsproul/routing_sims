@@ -26,7 +26,7 @@ use std::process;
 use {ToolArgs, NN, RR};
 use tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool, SimResult};
 use quorum::{SimpleQuorum, AgeQuorum, Quorum};
-use attack::UntargettedAttack;
+use attack::{Random, YoungestFromWorstGroup, OldestFromWorstGroup, QLearningAttack};
 
 
 pub trait DefaultStep<T> {
@@ -202,7 +202,7 @@ impl ArgProc {
                     simulation to calculate an attack success probability.")
             (@arg quorum_alg: -Q --quorumalg "Quorum algorithm: 'simple' group proportion, \
                     'age' (age and group proportions), 'all' (run both)")
-            (@arg strategy: -S --strategy [MOFO] "Attack targetting strategy: 'none', \
+            (@arg strategy: -S --strategy [STRATEGY] "Attack targetting strategy: 'none', \
                     'simple' (naive) targetting, 'all'")
         )
             .get_matches();
@@ -338,11 +338,15 @@ same time to complete proof-of-work.
         let mut q_use_age_iter = q_use_age.into_iter();
 
         let at_type = match matches.value_of("strategy") {
-            None => vec![AttackType::Untargetted],
-            Some("none") => vec![AttackType::Untargetted],
-            Some("simple") => vec![AttackType::Untargetted],
-            Some("all") => vec![AttackType::Untargetted],
-            Some(x) => panic!("unexpected: -T {}", x),
+            None | Some("qlearning") => vec![AttackType::QLearning],
+            Some("random") => vec![AttackType::Random],
+            Some("youngest") => vec![AttackType::YoungestFromWorstGroup],
+            Some("oldest") => vec![AttackType::OldestFromWorstGroup],
+            Some("all") => vec![
+                AttackType::Random, AttackType::YoungestFromWorstGroup,
+                AttackType::OldestFromWorstGroup, AttackType::QLearning
+            ],
+            Some(x) => panic!("unexpected attack strategy: {}", x),
         };
         let mut at_type_iter = at_type.into_iter();
 
@@ -436,15 +440,20 @@ impl SimType {
 }
 
 #[derive(Clone, Copy)]
-
 pub enum AttackType {
-    Untargetted,
+    Random,
+    YoungestFromWorstGroup,
+    OldestFromWorstGroup,
+    QLearning,
 }
 
 impl AttackType {
     pub fn name(&self) -> &'static str {
-        match self {
-            &AttackType::Untargetted => "untarg.",
+        match *self {
+            AttackType::Random => "random",
+            AttackType::YoungestFromWorstGroup => "youngest",
+            AttackType::OldestFromWorstGroup => "oldest",
+            AttackType::QLearning => "qlearning",
         }
     }
 }
@@ -551,8 +560,17 @@ impl SimParams {
                         Box::new(SimpleQuorum::new())
                     };
                     match self.targetting {
-                        AttackType::Untargetted => {
-                            Box::new(FullSimTool::<UntargettedAttack>::new(&args, quorum))
+                        AttackType::Random => {
+                            Box::new(FullSimTool::<Random>::new(&args, quorum))
+                        }
+                        AttackType::YoungestFromWorstGroup => {
+                            Box::new(FullSimTool::<YoungestFromWorstGroup>::new(&args, quorum))
+                        }
+                        AttackType::OldestFromWorstGroup => {
+                            Box::new(FullSimTool::<OldestFromWorstGroup>::new(&args, quorum))
+                        }
+                        AttackType::QLearning => {
+                            Box::new(FullSimTool::<QLearningAttack>::new(&args, quorum))
                         }
                     }
                 }
