@@ -281,6 +281,9 @@ pub fn malicious_fractions(groups: &Groups, n: usize) -> Vec<f64> {
 }
 
 pub fn compute_neighbour_fraction(our_prefix: Prefix, groups: &Groups) -> u32 {
+    if our_prefix.bit_count() == 0 {
+        return 0;
+    }
     let parent_prefix = our_prefix.popped();
     let neighbour_prefix = if parent_prefix.pushed(true) == our_prefix {
         parent_prefix.pushed(false)
