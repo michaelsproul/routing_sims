@@ -24,15 +24,6 @@ use rand::{weak_rng, XorShiftRng, Rng};
 use std::collections::HashMap;
 use metadata::Data;
 
-// TODO: optimise over these parameters.
-const LEARNING_RATE: f64 = 0.5;
-const DISCOUNT_FACTOR: f64 = 0.8;
-const GROUP_FOCUS: usize = 1;
-const INIT_QUALITY: f64 = 2.0;
-// Size of buckets that malicious fractions are divided into.
-const BUCKET_SIZE: f64 = 10.0;
-const CHURN_ROUNDING: u32 = 1;
-
 pub trait AttackStrategy {
     fn create(_params: &ToolArgs, _run_num: u32) -> Self where Self: Sized;
 
@@ -158,6 +149,31 @@ pub struct QLearningAttack {
     pub stats: Data<usize>,
     states_explored: usize,
     step: usize,
+    params: QLearningParams,
+}
+
+#[derive(Clone)]
+// TODO: optimise over these parameters.
+pub struct QLearningParams {
+    learning_rate: f64,
+    discount_factor: f64,
+    group_focus: usize,
+    init_quality: f64,
+    bucket_size: f64,
+    churn_rounding: u32,
+}
+
+impl Default for QLearningParams {
+    fn default() -> Self {
+        QLearningParams {
+            learning_rate: 0.5,
+            discount_factor: 0.8,
+            group_focus: 1,
+            init_quality: 2.0,
+            bucket_size: 10.0,
+            churn_rounding: 1,
+        }
+    }
 }
 
 // Compression of (state, action) pairs into essential information.
@@ -185,6 +201,7 @@ impl AttackStrategy for QLearningAttack {
             stats: data,
             states_explored: 0,
             step: 0,
+            params: QLearningParams::default(),
         }
     }
 
@@ -203,16 +220,19 @@ impl AttackStrategy for QLearningAttack {
 
             let id = State {
                 age: node_data.age(),
-                churns: (node_data.churns() / CHURN_ROUNDING) * CHURN_ROUNDING,
-                mal_fraction: int_percent(group),
+                churns: (node_data.churns() / self.params.churn_rounding) * self.params.churn_rounding,
+                mal_fraction: int_percent(group, self.params.bucket_size),
                 group_size: group.len(),
-                neighbour_fraction: compute_neighbour_fraction(prefix, net.groups()),
+                neighbour_fraction: compute_neighbour_fraction(
+                    prefix, net.groups(), self.params.bucket_size
+                ),
             };
 
             let mut new_state_this_iter = false;
+            let init_quality = self.params.init_quality;
             let quality = *self.q.entry(id.clone()).or_insert_with(|| {
                 new_state_this_iter = true;
-                INIT_QUALITY
+                init_quality
             });
 
             if quality > result_quality {
@@ -238,15 +258,17 @@ impl AttackStrategy for QLearningAttack {
         // Update q.
         if let Some(action) = previous_action {
             // TODO: determine whether differential or cumulative rewards work better...
-            let new_frac: f64 = malicious_fractions(net.groups(), GROUP_FOCUS).into_iter().sum();
+            let new_frac: f64 = malicious_fractions(net.groups(), self.params.group_focus)
+                .into_iter()
+                .sum();
             let r = new_frac; // - self.prev_fraction;
             self.prev_fraction = new_frac;
 
             let old_value = self.q[&action];
             let opt_future_est = result_quality;
 
-            let updated_val = old_value + LEARNING_RATE * (
-                r + DISCOUNT_FACTOR * opt_future_est - old_value
+            let updated_val = old_value + self.params.learning_rate * (
+                r + self.params.discount_factor * opt_future_est - old_value
             );
 
             self.q.insert(action, updated_val);
@@ -265,7 +287,7 @@ pub fn malicious_fractions(groups: &Groups, n: usize) -> Vec<f64> {
         .collect()
 }
 
-pub fn compute_neighbour_fraction(our_prefix: Prefix, groups: &Groups) -> u32 {
+pub fn compute_neighbour_fraction(our_prefix: Prefix, groups: &Groups, bucket_size: f64) -> u32 {
     if our_prefix.bit_count() == 0 {
         return 0;
     }
@@ -278,14 +300,14 @@ pub fn compute_neighbour_fraction(our_prefix: Prefix, groups: &Groups) -> u32 {
 
     groups.iter()
         .filter(|&(&prefix, _)| neighbour_prefix.is_prefix_of(prefix))
-        .map(|(_, ref group)| int_percent(group))
+        .map(|(_, ref group)| int_percent(group, bucket_size))
         .max()
         .unwrap()
 }
 
-pub fn int_percent(group: &Group) -> u32 {
+pub fn int_percent(group: &Group, bucket_size: f64) -> u32 {
     let num_malicious = group.values().filter(|d| d.is_malicious()).count();
     let frac = num_malicious as f64 / group.len() as f64;
-    let rounded = (BUCKET_SIZE * frac).round();
+    let rounded = (bucket_size * frac).round();
     rounded as u32
 }
