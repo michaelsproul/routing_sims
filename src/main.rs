@@ -120,7 +120,9 @@ impl ToolArgs {
 
     /// Return a string that describes this set of tool args at the given run number.
     pub fn spec_str(&self, run_num: u32) -> String {
-        format!("g={},q={:.02},s={},l={:.02},d={:.02},f={},i={:.02},r={:03}",
+        format!("n={},a={},g={},q={:.02},s={},l={:.02},d={:.02},f={},i={:.02},r={:03}",
+            self.num_initial,
+            self.num_attacking,
             self.min_group_size,
             self.quorum_prop,
             self.max_steps,
