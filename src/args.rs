@@ -211,6 +211,7 @@ impl ArgProc {
             (@arg group_focus: --groupfocus [FOCUS] "Number of groups to target")
             (@arg init_quality: --initquality [QUALITY] "Value assigned to unexplored actions")
             (@arg bucket_size: --bucketsize [SIZE] "Number of buckets for quantising malicious section fractions")
+            (@arg write_metadata: --metadata "Whether or not to write JSON metadata to disk")
         )
             .get_matches();
 
@@ -373,6 +374,8 @@ same time to complete proof-of-work.
         let qbs = parse_sp(&matches, "bucket_size", 10.0f64);
         let mut q_bucket_size_iter = qbs.iter();
 
+        let write_metadata = matches.is_present("write_metadata");
+
         let mut v = vec![SimParams {
                              sim_type: tool,
                              num_initial: nodes_iter.next().expect("first iter item"),
@@ -393,7 +396,8 @@ same time to complete proof-of-work.
                                  init_quality: q_init_quality_iter.next().unwrap(),
                                  bucket_size: q_bucket_size_iter.next().unwrap(),
                                  .. QLearningParams::default()
-                             }
+                             },
+                             write_metadata: write_metadata,
                          }];
 
         // TODO: check we're not going to cause out-of-memory here!
@@ -591,6 +595,7 @@ pub struct SimParams {
     pub proof_time: RR,
     pub max_days: RR,
     pub qlearning: QLearningParams,
+    pub write_metadata: bool,
 }
 
 impl SimParams {

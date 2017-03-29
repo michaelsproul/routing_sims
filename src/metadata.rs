@@ -29,16 +29,15 @@ pub struct Metadata {
 }
 
 impl Metadata {
-    pub fn new(run_num: u32) -> Self {
-        let dir = &format!("run{:02}", run_num);
+    pub fn new(dir: &str, write_out: bool) -> Self {
         Metadata {
             step_num: 0,
-            num_sections: Data::new(dir, "num_sections", "y"),
-            num_nodes: Data::new(dir, "num_nodes", "y2"),
-            num_malicious: Data::new(dir, "num_malicious", "y2"),
-            most_malicious: Data::new(dir, "most_malicious", "y"),
-            node_ages: Data::new(dir, "malicious_node_ages", ""),
-            section_info: SectionInfo::new(dir),
+            num_sections: Data::new(dir, "num_sections", "y", write_out),
+            num_nodes: Data::new(dir, "num_nodes", "y2", write_out),
+            num_malicious: Data::new(dir, "num_malicious", "y2", write_out),
+            most_malicious: Data::new(dir, "most_malicious", "y", write_out),
+            node_ages: Data::new(dir, "malicious_node_ages", "", write_out),
+            section_info: SectionInfo::new(dir, write_out),
         }
     }
 
@@ -83,14 +82,14 @@ impl <T: Encodable> Drop for Data<T> {
 }
 
 impl <T: Encodable> Data<T> {
-    pub fn new(dir: &str, name: &str, yaxis: &str) -> Self {
+    pub fn new(dir: &str, name: &str, yaxis: &str, write_out: bool) -> Self {
         Data {
             dir: Path::new("viz").join(dir),
             name: name.to_string(),
             x: vec![],
             y: vec![],
             yaxis: yaxis.into(),
-            write_out: true
+            write_out: write_out,
         }
     }
 
@@ -112,15 +111,17 @@ fn count_nodes(groups: &Groups) -> usize {
 pub struct SectionInfo {
     path: PathBuf,
     sections: HashMap<Prefix, Data<usize>>,
-    malicious: HashMap<Prefix, Data<usize>>
+    malicious: HashMap<Prefix, Data<usize>>,
+    write_out: bool,
 }
 
 impl SectionInfo {
-    pub fn new(dir: &str) -> Self {
+    pub fn new(dir: &str, write_out: bool) -> Self {
         SectionInfo {
             path: Path::new("viz").join(dir),
             sections: HashMap::new(),
-            malicious: HashMap::new()
+            malicious: HashMap::new(),
+            write_out: write_out,
         }
     }
 
@@ -128,10 +129,10 @@ impl SectionInfo {
         for (prefix, group) in groups {
             let data_name = format!("{:?}", prefix).to_lowercase();
             let mut section_data = self.sections.entry(*prefix).or_insert_with(|| {
-                Data::new("", &data_name, "y")
+                Data::new("", &data_name, "y", false)
             });
             let mut malicious_data = self.malicious.entry(*prefix).or_insert_with(|| {
-                Data::new("", &data_name, "y")
+                Data::new("", &data_name, "y", false)
             });
 
             section_data.add_point(step_num, group.len());
@@ -145,6 +146,10 @@ impl SectionInfo {
 
 impl Drop for SectionInfo {
     fn drop(&mut self) {
+        if !self.write_out {
+            return;
+        }
+
         let size_data = extract_data(&mut self.sections);
         let malicious_data = extract_data(&mut self.malicious);
 
@@ -156,10 +161,7 @@ impl Drop for SectionInfo {
 }
 
 fn extract_data<T: Encodable>(data_map: &mut HashMap<Prefix, Data<T>>) -> Vec<Data<T>> {
-    data_map.drain().map(|(_, mut item)| {
-        item.write_out = false;
-        item
-    }).collect()
+    data_map.drain().map(|(_, data)| data).collect()
 }
 
 fn open_json_file(dir: &Path, name: &str) -> io::Result<File> {

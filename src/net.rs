@@ -48,10 +48,10 @@ pub struct RestrictOnePerAge;
 impl AddRestriction for RestrictOnePerAge {
     fn can_add(node_data: &NodeData, group: &Group) -> bool {
         let age = node_data.age();
-        if age > 1 {
+        if age >= 1 {
             return true;
         }
-        // Number of existing nodes with this age (which is 0 or 1, must be 0 or 1).
+        // Number of existing nodes with this age (which is 0, must be 0 or 1).
         group.values().filter(|data| data.age() == age).count() <= 1
     }
 }
@@ -68,6 +68,8 @@ pub type Groups = HashMap<Prefix, Group>;
 pub struct Network {
     min_group_size: usize,
     groups: HashMap<Prefix, Group>,
+    // Nodes to be joined to the network on the current step.
+    pending_nodes: Vec<(NodeName, NodeData)>,
 }
 
 impl Network {
@@ -80,6 +82,7 @@ impl Network {
         Network {
             min_group_size: min_group_size,
             groups: groups,
+            pending_nodes: vec![],
         }
     }
 
@@ -103,14 +106,35 @@ impl Network {
     ) {
         let allow_ddos = false;
 
+        // Add all the pending nodes from the last iteration.
+        self.add_pending_nodes::<AR>();
+
         // Let the attacker do a join-leave attack.
         if allow_join_leave {
             self.process_join_leave(attack, allow_ddos);
         }
     }
 
+    pub fn add_pending_nodes<AR: AddRestriction>(&mut self) {
+        let pending_nodes = mem::replace(&mut self.pending_nodes, vec![]);
+
+        for (_, node_data) in pending_nodes {
+            self.add_node::<AR>(node_data);
+        }
+    }
+
+    pub fn add_all_pending_nodes<AR: AddRestriction>(&mut self) {
+        for _ in 0..100 {
+            if self.pending_nodes.is_empty() {
+                return;
+            }
+            self.add_pending_nodes::<AR>();
+        }
+        warn!("timed out! what the fuck is this");
+    }
+
     pub fn find_name<AR: AddRestriction>(&self, node_data: &NodeData) -> (Prefix, NodeName) {
-        loop {
+        for _ in 0..100 {
             let name = new_node_name();
             let prefix = self.find_prefix(name);
 
@@ -120,9 +144,10 @@ impl Network {
                 return (prefix, name);
             }
         }
+        panic!("couldn't find a name after 100 iterations, age is: {}", node_data.age());
     }
 
-    // Add a single node with a random name and process all relocations that occur as a result.
+    // Add a single node with a random name and add any relocated nodes to pending_nodes.
     pub fn add_node<AR: AddRestriction>(&mut self, node_data: NodeData) {
         // Find a name that works for this node.
         let (prefix, name) = self.find_name::<AR>(&node_data);
@@ -136,10 +161,9 @@ impl Network {
         // Split the group if necessary.
         let prefix = self.maybe_split(prefix, name);
 
-        // Process any relocations that occur, recursively.
-        if let Some((_, reloc_data)) = self.churn(prefix, name) {
-            // Recursion!
-            self.add_node::<AR>(reloc_data);
+        // Store any relocated node.
+        if let Some(to_reloc) = self.churn(prefix, name) {
+            self.pending_nodes.push(to_reloc);
         }
     }
 
@@ -164,8 +188,6 @@ impl Network {
 
     pub fn process_join_leave(&mut self, attack: &mut AttackStrategy, allow_ddos: bool) {
         if let Some((prefix, node_name)) = attack.force_to_rejoin(self, allow_ddos) {
-            trace!("Evicting {:?} from section {:?} motherfucker!", node_name, prefix);
-
             let removed = self.remove_node(prefix, node_name);
 
             self.add_node::<RestrictOnePerAge>(NodeData::new(removed.is_malicious()));

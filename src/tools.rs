@@ -141,7 +141,7 @@ impl<'a> Tool for SimStructureTool<'a> {
 
     fn calc_p_compromise(&self, _: u32) -> SimResult {
         // We need an "attack" strategy, though we only support one here
-        let mut attack = Random::create(self.args, 0);
+        let mut attack = Random::create(self.args, "");
 
         // Create a network of good nodes (this tool assumes all nodes are good in the sim then
         // assumes some are bad in subsequent calculations).
@@ -197,8 +197,9 @@ impl<'a, A: AttackStrategy> FullSimTool<'a, A> {
 
     // Run a simulation. Result has either 0 or 1 in each field, `(any_disruption, any_compromise)`.
     fn run_sim(&self, i: u32) -> SimResult {
-        let mut attack = A::create(self.args, i);
-        let mut metadata = Metadata::new(i);
+        let spec_str = self.args.spec_str(i);
+        let mut attack = A::create(self.args, &spec_str);
+        let mut metadata = Metadata::new(&spec_str, self.args.write_metadata);
 
         // 1. Create an initial network of good nodes.
         let mut net = Network::new(self.args.min_group_size as usize);
@@ -208,21 +209,23 @@ impl<'a, A: AttackStrategy> FullSimTool<'a, A> {
             trace!("adding node: {}", i);
             net.add_node::<RestrictOnePerAge>(NodeData::new(false));
             metadata.update(&net);
+            net.add_all_pending_nodes::<RestrictOnePerAge>();
+            metadata.update(&net);
         }
 
         // 2. Join the malicious nodes.
         for _ in 0..self.args.num_attacking {
             net.add_node::<RestrictOnePerAge>(NodeData::new(true));
+            net.add_all_pending_nodes::<RestrictOnePerAge>();
             metadata.update(&net);
         }
 
         // 2. Start attack
         // In this model, malicious nodes are added once while good nodes can be added
         // continuously.
-        //net.add_avail(0, self.args.num_attacking);
-        //let mut to_add_good = 0.0;
+        // net.add_avail(0, self.args.num_attacking);
+        // let mut to_add_good = 0.0;
 
-        let mut compromise = false;
         let mut disruption = false;
 
         let allow_join_leave = true;
@@ -242,16 +245,14 @@ impl<'a, A: AttackStrategy> FullSimTool<'a, A> {
             for (_, ref group) in net.groups() {
                 if self.quorum.quorum_compromised(group) {
                     // Compromise implies disruption!
-                    //return SimResult(1.0, 1.0);
-                    compromise = true;
-                    disruption = true;
+                    return SimResult(1.0, 1.0);
                 } else if self.quorum.quorum_disrupted(group) {
                     disruption = true;
                 }
             }
         }
 
-        SimResult(if disruption { 1.0 } else { 0.0 }, if compromise { 1.0 } else { 0.0 })
+        SimResult(if disruption { 1.0 } else { 0.0 }, 0.0)
     }
 }
 
@@ -276,6 +277,8 @@ impl<'a, A: AttackStrategy> Tool for FullSimTool<'a, A>
                     |v1, v2| SimResult(v1.0 + v2.0, v1.1 + v2.1));
 
         let denom = repetitions as RR;
-        SimResult(result.0 / denom, result.1 / denom)
+        let res = SimResult(result.0 / denom, result.1 / denom);
+        println!("{} {:.05} {:.05}", self.args.spec_str(0), res.p_disrupt(), res.p_compromise());
+        res
     }
 }

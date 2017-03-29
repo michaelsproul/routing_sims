@@ -35,8 +35,6 @@ mod tools;
 mod attack;
 mod metadata;
 
-use std::cmp::max;
-
 use rayon::prelude::*;
 use rayon::par_iter::collect::collect_into;
 
@@ -66,15 +64,16 @@ pub struct ToolArgs {
     // number malicious added at start of attack
     num_attacking: NN,
     // maximum number joining (nodes per step)
-    max_join_rate: RR,
+    //max_join_rate: RR,
     // background rate of new good nodes during attack (nodes per step)
-    add_rate_good: RR,
+    //add_rate_good: RR,
     // leave rate of good nodes (probability each node leaving per step)
-    leave_rate_good: RR,
+    //leave_rate_good: RR,
     min_group_size: NN,
     quorum_prop: RR,
     max_steps: NN,
     qlearning: QLearningParams,
+    write_metadata: bool,
 }
 
 impl ToolArgs {
@@ -108,14 +107,29 @@ impl ToolArgs {
         ToolArgs {
             num_initial: nn,
             num_attacking: nm,
-            max_join_rate: max_join,
-            add_rate_good: add_good,
-            leave_rate_good: leave_good,
+            //max_join_rate: max_join,
+            //add_rate_good: add_good,
+            //leave_rate_good: leave_good,
             min_group_size: params.min_group_size,
             quorum_prop: params.quorum_prop,
             max_steps: (params.max_days / step_len).round() as NN,
             qlearning: params.qlearning.clone(),
+            write_metadata: params.write_metadata,
         }
+    }
+
+    /// Return a string that describes this set of tool args at the given run number.
+    pub fn spec_str(&self, run_num: u32) -> String {
+        format!("g={},q={:.02},s={},l={:.02},d={:.02},f={},i={:.02},r={:03}",
+            self.min_group_size,
+            self.quorum_prop,
+            self.max_steps,
+            self.qlearning.learning_rate,
+            self.qlearning.discount_factor,
+            self.qlearning.group_focus,
+            self.qlearning.init_quality,
+            run_num
+        )
     }
 }
 
@@ -124,15 +138,13 @@ fn main() {
     env_logger::init().unwrap();
 
     let (repetitions, param_sets) = ArgProc::make_sim_params();
-    // TODO: print number of sims and/or progress
 
-    info!("Starting to simulate {} different parameter sets",
-          param_sets.len());
+    println!("Starting to simulate {} different parameter sets", param_sets.len());
     let mut results = Vec::new();
     collect_into(param_sets.into_par_iter().map(|item| item.result(repetitions)),
                  &mut results);
 
-    //     tool.print_message();
+    /*
     let col_widths: Vec<usize> = PARAM_TITLES.iter().map(|name| max(name.len(), 8)).collect();
     for col in 0..col_widths.len() {
         print!("{1:<0$}", col_widths[col], PARAM_TITLES[col]);
@@ -162,4 +174,5 @@ fn main() {
         print!("{1:<.*}", col_widths[9] - 2, result.p_compromise());
         println!("");
     }
+    */
 }

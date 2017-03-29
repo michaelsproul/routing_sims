@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use metadata::Data;
 
 pub trait AttackStrategy {
-    fn create(_params: &ToolArgs, _run_num: u32) -> Self where Self: Sized;
+    fn create(_params: &ToolArgs, _spec: &str) -> Self where Self: Sized;
 
     fn force_to_rejoin(&mut self, _net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
         None
@@ -38,7 +38,7 @@ pub struct Random {
 }
 
 impl AttackStrategy for Random {
-    fn create(_: &ToolArgs, _: u32) -> Self {
+    fn create(_: &ToolArgs, _: &str) -> Self {
         Random {
             rng: weak_rng()
         }
@@ -73,7 +73,7 @@ fn all_malicious_nodes(groups: &Groups) -> Vec<(Prefix, NodeName)> {
 pub struct OldestFromWorstGroup;
 
 impl AttackStrategy for OldestFromWorstGroup {
-    fn create(_: &ToolArgs, _: u32) -> Self {
+    fn create(_: &ToolArgs, _: &str) -> Self {
         OldestFromWorstGroup
     }
 
@@ -91,7 +91,7 @@ impl AttackStrategy for OldestFromWorstGroup {
 pub struct YoungestFromWorstGroup;
 
 impl AttackStrategy for YoungestFromWorstGroup {
-    fn create(_: &ToolArgs, _: u32) -> Self {
+    fn create(_: &ToolArgs, _: &str) -> Self {
         YoungestFromWorstGroup
     }
 
@@ -184,13 +184,12 @@ struct State {
 }
 
 impl AttackStrategy for QLearningAttack {
-    fn create(args: &ToolArgs, run_num: u32) -> Self {
-        let data = Data::new(&format!("run{:02}", run_num), "qlearn_stats", "y");
+    fn create(args: &ToolArgs, spec_str: &str) -> Self {
         QLearningAttack {
             q: HashMap::new(),
             prev_action: None,
             prev_fraction: 0.0,
-            stats: data,
+            stats: Data::new(spec_str, "qlearn_stats", "y", args.write_metadata),
             states_explored: 0,
             step: 0,
             params: args.qlearning.clone(),
