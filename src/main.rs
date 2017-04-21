@@ -69,8 +69,10 @@ pub struct ToolArgs {
     //add_rate_good: RR,
     // leave rate of good nodes (probability each node leaving per step)
     //leave_rate_good: RR,
-    min_group_size: NN,
-    quorum_prop: RR,
+    min_section_size: NN,
+    section_quorum_prop: RR,
+    group_size: NN,
+    group_quorum_prop: RR,
     max_steps: NN,
     qlearning: QLearningParams,
     write_metadata: bool,
@@ -84,7 +86,7 @@ impl ToolArgs {
         // Step length in days:
         let step_len = params.proof_time;
 
-        assert!(params.quorum_prop >= 0.0 && params.quorum_prop <= 1.0);
+        assert!(params.section_quorum_prop >= 0.0 && params.section_quorum_prop <= 1.0);
 
         let max_join = params.max_join.from_base(nn as RR) / step_len;
         // Convert from num/day to p/step:
@@ -110,8 +112,10 @@ impl ToolArgs {
             //max_join_rate: max_join,
             //add_rate_good: add_good,
             //leave_rate_good: leave_good,
-            min_group_size: params.min_group_size,
-            quorum_prop: params.quorum_prop,
+            min_section_size: params.min_section_size,
+            section_quorum_prop: params.section_quorum_prop,
+            group_size: params.group_size,
+            group_quorum_prop: params.group_quorum_prop,
             max_steps: (params.max_days / step_len).round() as NN,
             qlearning: params.qlearning.clone(),
             write_metadata: params.write_metadata,
@@ -120,11 +124,13 @@ impl ToolArgs {
 
     /// Return a string that describes this set of tool args at the given run number.
     pub fn spec_str(&self, run_num: u32) -> String {
-        format!("n={},a={},g={},q={:.02},s={},l={:.02},d={:.02},f={},i={:.02},r={:03}",
+        format!("n={},a={},ss={},sq={:.02},gs={},gq={:.02},s={},l={:.02},d={:.02},f={},i={:.02},r={:03}",
             self.num_initial,
             self.num_attacking,
-            self.min_group_size,
-            self.quorum_prop,
+            self.min_section_size,
+            self.section_quorum_prop,
+            self.group_size,
+            self.group_quorum_prop,
             self.max_steps,
             self.qlearning.learning_rate,
             self.qlearning.discount_factor,
@@ -165,9 +171,9 @@ fn main() {
         print!(" ");
         print!("{1:<0$}", col_widths[4], args.leave_rate_good);
         print!(" ");
-        print!("{1:<0$}", col_widths[5], args.min_group_size);
+        print!("{1:<0$}", col_widths[5], args.min_section_size);
         print!(" ");
-        print!("{1:<.*}", col_widths[6] - 2, args.quorum_prop);
+        print!("{1:<.*}", col_widths[6] - 2, args.section_quorum_prop);
         print!(" ");
         print!("{1:<.*}", col_widths[7] - 2, args.max_steps);
         print!(" ");

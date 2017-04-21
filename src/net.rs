@@ -29,7 +29,14 @@ use std::mem;
 
 use {NN, ToolArgs};
 use attack::AttackStrategy;
-use node::{Prefix, NodeName, NodeData, new_node_name};
+use node::{Prefix, NodeName, NodeData, new_node_name, random_data_id};
+use quorum::Quorum;
+
+/// Maximum number of iterations to run when adding pending nodes.
+const PENDING_NODE_LIMIT: usize = 100;
+
+/// Maximum number of iterations to run when searching for a name and a section to accept us.
+const FIND_NAME_LIMIT: usize = 100;
 
 /// Controls whether a node can get added to a group
 pub trait AddRestriction {
@@ -66,7 +73,7 @@ pub type Groups = HashMap<Prefix, Group>;
 /// This struct implements both the low-level network structure code and the high-level code used
 /// to simulate network creation.
 pub struct Network {
-    min_group_size: usize,
+    min_section_size: usize,
     groups: HashMap<Prefix, Group>,
     // Nodes to be joined to the network on the current step.
     pending_nodes: Vec<(NodeName, NodeData)>,
@@ -76,11 +83,11 @@ impl Network {
     /// Create. Specify minimum group size.
     ///
     /// An initial, empty, group is created.
-    pub fn new(min_group_size: usize) -> Self {
+    pub fn new(min_section_size: usize) -> Self {
         let mut groups = HashMap::new();
         groups.insert(Prefix::new(0, 0), Group::new());
         Network {
-            min_group_size: min_group_size,
+            min_section_size: min_section_size,
             groups: groups,
             pending_nodes: vec![],
         }
@@ -124,27 +131,30 @@ impl Network {
     }
 
     pub fn add_all_pending_nodes<AR: AddRestriction>(&mut self) {
-        for _ in 0..100 {
+        for _ in 0..PENDING_NODE_LIMIT {
             if self.pending_nodes.is_empty() {
                 return;
             }
             self.add_pending_nodes::<AR>();
         }
-        warn!("timed out! what the fuck is this");
+        warn!("Couldn't add all pending nodes this step");
     }
 
     pub fn find_name<AR: AddRestriction>(&self, node_data: &NodeData) -> (Prefix, NodeName) {
-        for _ in 0..100 {
+        for _ in 0..FIND_NAME_LIMIT {
             let name = new_node_name();
             let prefix = self.find_prefix(name);
 
             let group = &self.groups[&prefix];
 
-            if group.len() <= self.min_group_size || AR::can_add(node_data, group) {
+            if group.len() <= self.min_section_size || AR::can_add(node_data, group) {
                 return (prefix, name);
             }
         }
-        panic!("couldn't find a name after 100 iterations, age is: {}", node_data.age());
+        panic!("Couldn't find a name after {} iterations, age is: {}",
+            FIND_NAME_LIMIT,
+            node_data.age()
+        );
     }
 
     // Add a single node with a random name and add any relocated nodes to pending_nodes.
@@ -225,7 +235,7 @@ impl Network {
     pub fn need_merge(&self) -> Vec<Prefix> {
         let mut result = vec![];
         for (prefix, group) in &self.groups {
-            if group.len() <= self.min_group_size {
+            if group.len() <= self.min_section_size {
                 result.push(*prefix);
             }
         }
@@ -281,7 +291,7 @@ impl Network {
         let prefix0 = prefix.pushed(false);
         let size_all = group.len();
         let size0 = group.iter().filter(|node| prefix0.matches(*node.0)).count();
-        size0 >= self.min_new_group_size() && size_all - size0 >= self.min_new_group_size()
+        size0 >= self.min_new_section_size() && size_all - size0 >= self.min_new_section_size()
     }
 
     /// Do a split. Return prefixes of new groups.
@@ -336,7 +346,7 @@ impl Network {
             None => return None,
         };
 
-        if group.len() <= self.min_group_size {
+        if group.len() <= self.min_section_size {
             // Relocation is blocked to prevent the group from becoming too small,
             // but we still need the node to age.
             group.get_mut(&to_relocate).expect("have node").incr_age();
@@ -352,8 +362,52 @@ impl Network {
         Some((to_relocate, node_data))
     }
 
-    fn min_new_group_size(&self) -> usize {
-        // mirrors RoutingTable
-        self.min_group_size + 1
+    /// Return the estimated proportion of compromised data on the network.
+    pub fn compromised_data_fraction(&self, group_size: NN, group_quorum: &Box<Quorum + Sync>) -> Option<f64> {
+        let num_samples = 5000;
+
+        let mut num_compromised = 0;
+
+        for _ in 0..num_samples {
+            let data_id = random_data_id();
+
+            let section_pfx = self.groups
+                .keys()
+                .max_by_key(|prefix| prefix.common_prefix(data_id))
+                .expect("non-empty set of sections");
+
+            let section = &self.groups[section_pfx];
+            let closest_names = closest(group_size, data_id, section.keys());
+
+            // FIXME(michael): this is probably a bit slow and unnecessary.
+            let close_group: Group = closest_names.into_iter()
+                .map(|name| (name, section[&name].clone()))
+                .collect();
+
+            if group_quorum.quorum_compromised(&close_group) {
+                num_compromised += 1;
+            }
+        }
+
+        if num_compromised > 0 {
+            Some(num_compromised as f64 / num_samples as f64)
+        } else {
+            None
+        }
     }
+
+    fn min_new_section_size(&self) -> usize {
+        // mirrors RoutingTable
+        self.min_section_size + 1
+    }
+}
+
+/// Get the closest n names to val.
+fn closest<'a, S>(n: u64, val: NN, section: S) -> Vec<NN>
+    where S: IntoIterator<Item=&'a NN>
+{
+    let mut nodes = section.into_iter().map(|&x| x).collect::<Vec<_>>();
+    nodes.sort_by_key(|point| point ^ val);
+    nodes.truncate(n as usize);
+    nodes
 }

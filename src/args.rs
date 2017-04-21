@@ -193,9 +193,11 @@ impl ArgProc {
                     node leaving each day); can be a percentage (expected number per 100 per \
                     day). Nodes which leave are replaced with new nodes to maintain the target \
                     number. Leaving happens randomly.")
-            (@arg group: -g --group [RANGE] "Minimum group size, e.g. 10-20.")
-            (@arg quorum: -q --quorum [RANGE] "Quorum size as a proportion of group size, \
+            (@arg sectionsize: --sectionsize [RANGE] "Minimum section size, e.g. 10-20.")
+            (@arg sectionquorum: --sectionquorum [RANGE] "Section quorum size, as a fraction, \
                     e.g. 0.5-0.7:0.1.")
+            (@arg groupsize: --groupsize [RANGE] "Group size.")
+            (@arg groupquorum: --groupquorum [RANGE] "Group quorum size, as a fraction.")
             (@arg prooftime: --prooftime [RANGE] "Time taken to complete resource proof (days). \
                     Default is 1.")
             (@arg maxdays: -d --maxdays [RANGE] "Maximum length of an attack before giving up \
@@ -320,14 +322,6 @@ same time to complete proof-of-work.
                     |s| s.parse().expect("parse"));
         let mut leave_good_iter = leave_good_range.iter();
 
-        let group_size_range: SamplePoints<NN> = matches.value_of("group")
-            .map_or(SamplePoints::Number(10), |s| s.parse().expect("parse"));
-        let mut group_size_iter = group_size_range.iter();
-
-        let quorum_range = matches.value_of("quorum")
-            .map_or(SamplePoints::Number(0.5), |s| s.parse().expect("parse"));
-        let mut quorum_iter = quorum_range.iter();
-
         let proof_time_range: SamplePoints<RR> = matches.value_of("prooftime")
             .map_or(SamplePoints::Number(1.0), |s| s.parse().expect("parse"));
         let mut proof_time_iter = proof_time_range.iter();
@@ -358,6 +352,20 @@ same time to complete proof-of-work.
         };
         let mut at_type_iter = at_type.into_iter();
 
+        // Section parameters.
+        let section_size_range = parse_sp(&matches, "sectionsize", 10);
+        let mut section_size_iter = section_size_range.iter();
+
+        let section_quorum_range = parse_sp(&matches, "sectionquorum", 0.51);
+        let mut section_quorum_iter = section_quorum_range.iter();
+
+        // Group parameters.
+        let group_size = parse_sp(&matches, "groupsize", 8);
+        let mut group_size_iter = group_size.iter();
+
+        let group_quorum = parse_sp(&matches, "groupquorum", 0.51);
+        let mut group_quorum_iter = group_quorum.iter();
+
         // Q-learning magic.
         let qlr = parse_sp(&matches, "learning_rate", 0.5f64);
         let mut q_learning_rate_iter = qlr.iter();
@@ -383,8 +391,10 @@ same time to complete proof-of-work.
                              max_join: max_join_iter.next().expect("first iter item"),
                              add_good: add_good_iter.next().expect("first iter item"),
                              leave_good: leave_good_iter.next().expect("first iter item"),
-                             min_group_size: group_size_iter.next().expect("first iter item"),
-                             quorum_prop: quorum_iter.next().expect("first iter item"),
+                             min_section_size: section_size_iter.next().expect("first iter item"),
+                             section_quorum_prop: section_quorum_iter.next().expect("first iter item"),
+                             group_size: group_size_iter.next().unwrap(),
+                             group_quorum_prop: group_quorum_iter.next().unwrap(),
                              proof_time: proof_time_iter.next().expect("first iter item"),
                              max_days: max_days_iter.next().expect("first iter item"),
                              age_quorum: q_use_age_iter.next().expect("first iter item"),
@@ -414,12 +424,6 @@ same time to complete proof-of-work.
         // Replicate for all leave rates of good nodes
         cartesian_product(&mut v, add_good_iter, |p| &mut p.add_good);
 
-        // Replicate for all group sizes
-        cartesian_product(&mut v, group_size_iter, |p| &mut p.min_group_size);
-
-        // Replicate for all quorum sizes
-        cartesian_product(&mut v, quorum_iter, |p| &mut p.quorum_prop);
-
         // Replicate for all proof-of-work times
         cartesian_product(&mut v, proof_time_iter, |p| &mut p.proof_time);
 
@@ -431,6 +435,14 @@ same time to complete proof-of-work.
 
         // Replicate for all attack strategies
         cartesian_product(&mut v, at_type_iter, |p| &mut p.targetting);
+
+        // Section params.
+        cartesian_product(&mut v, section_size_iter, |p| &mut p.min_section_size);
+        cartesian_product(&mut v, section_quorum_iter, |p| &mut p.section_quorum_prop);
+
+        // Group params.
+        cartesian_product(&mut v, group_size_iter, |p| &mut p.group_size);
+        cartesian_product(&mut v, group_quorum_iter, |p| &mut p.group_quorum_prop);
 
         // Q-learning.
         cartesian_product(&mut v, q_learning_rate_iter, |p| &mut p.qlearning.learning_rate);
@@ -590,8 +602,10 @@ pub struct SimParams {
     pub max_join: RelOrAbs<RR>,
     pub add_good: RelOrAbs<RR>,
     pub leave_good: RelOrAbs<RR>,
-    pub min_group_size: NN,
-    pub quorum_prop: RR,
+    pub min_section_size: NN,
+    pub section_quorum_prop: RR,
+    pub group_size: NN,
+    pub group_quorum_prop: RR,
     pub proof_time: RR,
     pub max_days: RR,
     pub qlearning: QLearningParams,
@@ -609,23 +623,25 @@ impl SimParams {
                 SimType::FullSim => {
                     // note: FullSimTool is templated on quorum and attack strategy parameters, so
                     // we need to create the whole thing at once (not create parameters first)
-                    let quorum: Box<Quorum + Sync> = if self.age_quorum {
+                    let section_quorum: Box<Quorum + Sync> = if self.age_quorum {
                         Box::new(AgeQuorum::new())
                     } else {
                         Box::new(SimpleQuorum::new())
                     };
+                    // FIXME(michael): age based quorums for groups
+                    let group_quorum = Box::new(SimpleQuorum::new());
                     match self.targetting {
                         AttackType::Random => {
-                            Box::new(FullSimTool::<Random>::new(&args, quorum))
+                            Box::new(FullSimTool::<Random>::new(&args, section_quorum, group_quorum))
                         }
                         AttackType::YoungestFromWorstGroup => {
-                            Box::new(FullSimTool::<YoungestFromWorstGroup>::new(&args, quorum))
+                            Box::new(FullSimTool::<YoungestFromWorstGroup>::new(&args, section_quorum, group_quorum))
                         }
                         AttackType::OldestFromWorstGroup => {
-                            Box::new(FullSimTool::<OldestFromWorstGroup>::new(&args, quorum))
+                            Box::new(FullSimTool::<OldestFromWorstGroup>::new(&args, section_quorum, group_quorum))
                         }
                         AttackType::QLearning => {
-                            Box::new(FullSimTool::<QLearningAttack>::new(&args, quorum))
+                            Box::new(FullSimTool::<QLearningAttack>::new(&args, section_quorum, group_quorum))
                         }
                     }
                 }

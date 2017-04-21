@@ -26,6 +26,7 @@ pub struct Metadata {
     most_malicious: Data<f64>,
     node_ages: Data<u32>,
     section_info: SectionInfo,
+    corrupt_data: Data<f64>,
 }
 
 impl Metadata {
@@ -38,10 +39,11 @@ impl Metadata {
             most_malicious: Data::new(dir, "most_malicious", "y", write_out),
             node_ages: Data::new(dir, "malicious_node_ages", "", write_out),
             section_info: SectionInfo::new(dir, write_out),
+            corrupt_data: Data::new(dir, "corrupt_data", "", write_out),
         }
     }
 
-    pub fn update(&mut self, net: &Network) {
+    pub fn update(&mut self, net: &Network, corrupt_fraction: f64) {
         let groups = net.groups();
         self.num_sections.add_point(self.step_num, groups.len());
         self.num_nodes.add_point(self.step_num, count_nodes(groups));
@@ -49,6 +51,7 @@ impl Metadata {
         self.update_most_malicious(groups);
         self.update_malicious_node_ages(groups);
         self.section_info.update(self.step_num, groups);
+        self.corrupt_data.add_point(self.step_num, corrupt_fraction);
         self.step_num += 1;
     }
 
@@ -155,7 +158,7 @@ impl Drop for SectionInfo {
 
         if let Err(e) = write_out_array(&self.path, "section_sizes", size_data).and(
                         write_out_array(&self.path, "section_mal", malicious_data)) {
-            println!("Something's fucked: {:?}", e);
+            error!("Failed to write SectionInfo metadata: {:?}", e);
         }
     }
 }

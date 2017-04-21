@@ -29,16 +29,18 @@ use node::NodeData;
 use metadata::Metadata;
 use std::marker::PhantomData;
 
-
 /// First value is probability of disruption, second is probability of compromise.
 #[derive(Clone, Copy)]
-pub struct SimResult(RR, RR);
+pub struct SimResult(RR, RR, RR);
 impl SimResult {
     pub fn p_disrupt(&self) -> RR {
         self.0
     }
     pub fn p_compromise(&self) -> RR {
         self.1
+    }
+    pub fn p_data_compromise(&self) -> RR {
+        self.2
     }
 }
 
@@ -64,7 +66,7 @@ pub struct DirectCalcTool<'a> {
 
 impl<'a> DirectCalcTool<'a> {
     pub fn new(args: &'a ToolArgs) -> Self {
-        let quorum = SimpleQuorum::from(args.quorum_prop);
+        let quorum = SimpleQuorum::from(args.section_quorum_prop);
         DirectCalcTool {
             args: args,
             quorum: quorum,
@@ -85,7 +87,7 @@ impl<'a> Tool for DirectCalcTool<'a> {
     }
 
     fn calc_p_compromise(&self, _: u32) -> SimResult {
-        let k = self.args.min_group_size;
+        let k = self.args.min_section_size;
         let q = self.quorum.quorum_size(k).expect("simple quorum size");
         let n = self.args.num_initial + self.args.num_attacking;
         let pd = prob_disruption(n, self.args.num_attacking, k, q);
@@ -99,9 +101,10 @@ impl<'a> Tool for DirectCalcTool<'a> {
                pd,
                pc);
 
-        let n_groups = (n as RR) / (self.args.min_group_size as RR);
+        let n_groups = (n as RR) / (self.args.min_section_size as RR);
         SimResult(1.0 - (1.0 - pd).powf(n_groups),
-                  1.0 - (1.0 - pc).powf(n_groups))
+                  1.0 - (1.0 - pc).powf(n_groups),
+                  0.0)
     }
 }
 
@@ -119,7 +122,7 @@ pub struct SimStructureTool<'a> {
 
 impl<'a> SimStructureTool<'a> {
     pub fn new(args: &'a ToolArgs) -> Self {
-        let quorum = SimpleQuorum::from(args.quorum_prop);
+        let quorum = SimpleQuorum::from(args.section_quorum_prop);
         SimStructureTool {
             args: args,
             quorum: quorum,
@@ -145,7 +148,7 @@ impl<'a> Tool for SimStructureTool<'a> {
 
         // Create a network of good nodes (this tool assumes all nodes are good in the sim then
         // assumes some are bad in subsequent calculations).
-        let mut net = Network::new(self.args.min_group_size as usize);
+        let mut net = Network::new(self.args.min_section_size as usize);
         // Yes, *attacking* nodes are *good* for this network initialisation!
         net.add_avail(self.args.num_initial + self.args.num_attacking, 0);
         while net.has_avail() {
@@ -171,7 +174,7 @@ impl<'a> Tool for SimStructureTool<'a> {
             p_no_disruption *= 1.0 - pd;
             p_no_compromise *= 1.0 - pc;
         }
-        SimResult(1.0 - p_no_disruption, 1.0 - p_no_compromise)
+        SimResult(1.0 - p_no_disruption, 1.0 - p_no_compromise, 0.0)
     }
 }
 
@@ -181,16 +184,23 @@ impl<'a> Tool for SimStructureTool<'a> {
 /// Can relocate nodes according to the node ageing RFC (roughly).
 pub struct FullSimTool<'a, A: AttackStrategy> {
     args: &'a ToolArgs,
-    quorum: Box<Quorum + Sync>,
+    section_quorum: Box<Quorum + Sync>,
+    group_quorum: Box<Quorum + Sync>,
     _phantom: PhantomData<A>,
 }
 
 impl<'a, A: AttackStrategy> FullSimTool<'a, A> {
-    pub fn new(args: &'a ToolArgs, mut quorum: Box<Quorum + Sync>) -> Self {
-        quorum.set_quorum_proportion(args.quorum_prop);
+    pub fn new(args: &'a ToolArgs,
+               mut section_quorum: Box<Quorum + Sync>,
+               mut group_quorum: Box<Quorum + Sync>)
+               -> Self
+    {
+        section_quorum.set_quorum_proportion(args.section_quorum_prop);
+        group_quorum.set_quorum_proportion(args.group_quorum_prop);
         FullSimTool {
             args: args,
-            quorum: quorum,
+            section_quorum: section_quorum,
+            group_quorum: group_quorum,
             _phantom: PhantomData,
         }
     }
@@ -202,22 +212,22 @@ impl<'a, A: AttackStrategy> FullSimTool<'a, A> {
         let mut metadata = Metadata::new(&spec_str, self.args.write_metadata);
 
         // 1. Create an initial network of good nodes.
-        let mut net = Network::new(self.args.min_group_size as usize);
-        metadata.update(&net);
+        let mut net = Network::new(self.args.min_section_size as usize);
+        metadata.update(&net, 0.0);
 
         for i in 0..self.args.num_initial {
             trace!("adding node: {}", i);
             net.add_node::<RestrictOnePerAge>(NodeData::new(false));
-            metadata.update(&net);
+            metadata.update(&net, 0.0);
             net.add_all_pending_nodes::<RestrictOnePerAge>();
-            metadata.update(&net);
+            metadata.update(&net, 0.0);
         }
 
         // 2. Join the malicious nodes.
         for _ in 0..self.args.num_attacking {
             net.add_node::<RestrictOnePerAge>(NodeData::new(true));
             net.add_all_pending_nodes::<RestrictOnePerAge>();
-            metadata.update(&net);
+            metadata.update(&net, 0.0);
         }
 
         // 2. Start attack
@@ -227,6 +237,7 @@ impl<'a, A: AttackStrategy> FullSimTool<'a, A> {
         // let mut to_add_good = 0.0;
 
         let mut disruption = false;
+        let mut data_corrupted = false;
 
         let allow_join_leave = true;
 
@@ -239,20 +250,29 @@ impl<'a, A: AttackStrategy> FullSimTool<'a, A> {
             */
 
             net.do_step::<RestrictOnePerAge>(&self.args, &mut attack, allow_join_leave);
-            metadata.update(&net);
+
+            let corrupt_fraction = net.compromised_data_fraction(
+                self.args.group_size,
+                &self.group_quorum
+            );
+
+            data_corrupted |= corrupt_fraction.is_some();
+
+            metadata.update(&net, corrupt_fraction.unwrap_or(0.0));
 
             // Check if disruption or compromise occurred:
+            // FIXME(michael): rename groups => sections.
             for (_, ref group) in net.groups() {
-                if self.quorum.quorum_compromised(group) {
+                if self.section_quorum.quorum_compromised(group) {
                     // Compromise implies disruption!
-                    return SimResult(1.0, 1.0);
-                } else if self.quorum.quorum_disrupted(group) {
+                    return SimResult(1.0, 1.0, if data_corrupted { 1.0 } else { 0.0 });
+                } else if self.section_quorum.quorum_disrupted(group) {
                     disruption = true;
                 }
             }
         }
 
-        SimResult(if disruption { 1.0 } else { 0.0 }, 0.0)
+        SimResult(if disruption { 1.0 } else { 0.0 }, 0.0, if data_corrupted { 1.0 } else { 0.0 })
     }
 }
 
@@ -273,12 +293,14 @@ impl<'a, A: AttackStrategy> Tool for FullSimTool<'a, A>
         let result = (0..repetitions)
             .into_par_iter()
             .map(|i| self.run_sim(i))
-            .reduce(|| SimResult(0.0, 0.0),
-                    |v1, v2| SimResult(v1.0 + v2.0, v1.1 + v2.1));
+            .reduce(|| SimResult(0.0, 0.0, 0.0),
+                    |v1, v2| SimResult(v1.0 + v2.0, v1.1 + v2.1, v1.2 + v2.2));
 
         let denom = repetitions as RR;
-        let res = SimResult(result.0 / denom, result.1 / denom);
-        println!("{} {:.05} {:.05}", self.args.spec_str(0), res.p_disrupt(), res.p_compromise());
+        let res = SimResult(result.0 / denom, result.1 / denom, result.2 / denom);
+        println!("{} {:.05} {:.05} {:.05}",
+            self.args.spec_str(0), res.p_disrupt(), res.p_compromise(), res.p_data_compromise()
+        );
         res
     }
 }

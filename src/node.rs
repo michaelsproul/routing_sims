@@ -122,6 +122,11 @@ impl Prefix {
         }
     }
 
+    /// Compute the length of the common prefix of this prefix and the given name.
+    pub fn common_prefix(&self, name: NN) -> usize {
+        self.name.common_prefix(name)
+    }
+
     /// Returns `self` with an appended bit: `0` if `bit` is `false`, and `1` if `bit` is `true`.
     pub fn pushed(mut self, bit: bool) -> Prefix {
         self.name = self.name.with_bit(self.bit_count, bit);
@@ -209,16 +214,19 @@ pub type NodeName = u64;
 
 use std::cell::RefCell;
 thread_local! {
-    static SHITTY_RNG: RefCell<XorShiftRng> = RefCell::new(weak_rng());
+    static WEAK_RNG: RefCell<XorShiftRng> = RefCell::new(weak_rng());
 }
 
 /// Generate a new node name
 pub fn new_node_name() -> NodeName {
-    SHITTY_RNG.with(|rng| {
+    WEAK_RNG.with(|rng| {
         rng.borrow_mut().gen()
     })
-    //use rand::thread_rng;
-    //thread_rng().gen()
+}
+
+/// Generate a random data ID.
+pub fn random_data_id() -> u64 {
+    new_node_name()
 }
 
 /// Data stored for a node
