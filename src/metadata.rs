@@ -5,7 +5,7 @@ use std::fs::{File, create_dir_all};
 use std::path::{Path, PathBuf};
 use rustc_serialize::json::as_json;
 use std::collections::HashMap;
-use attack::most_malicious_groups;
+use attack::{MaliciousMetric, most_malicious_groups};
 use rustc_serialize::{Encodable};
 
 #[derive(RustcEncodable, Clone)]
@@ -56,7 +56,7 @@ impl Metadata {
     }
 
     fn update_most_malicious(&mut self, groups: &Groups) {
-        let malicious = most_malicious_groups(groups);
+        let malicious = most_malicious_groups(groups, MaliciousMetric::AgeFraction);
         let frac = malicious.first().map(|&(_, frac)| frac).unwrap_or(0.0);
         self.most_malicious.add_point(self.step_num, frac);
     }

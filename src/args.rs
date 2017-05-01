@@ -28,7 +28,7 @@ use {ToolArgs, NN, RR};
 use tools::{Tool, DirectCalcTool, SimStructureTool, FullSimTool, SimResult};
 use quorum::{SimpleQuorum, AgeQuorum, Quorum};
 use attack::{Random, YoungestFromWorstGroup, OldestFromWorstGroup, QLearningAttack,
-             QLearningParams};
+             QLearningParams, NewAttack};
 
 
 pub trait DefaultStep<T> {
@@ -342,6 +342,7 @@ same time to complete proof-of-work.
         let at_type = match matches.value_of("strategy") {
             None | Some("qlearning") => vec![AttackType::QLearning],
             Some("random") => vec![AttackType::Random],
+            Some("new") => vec![AttackType::NewAttack],
             Some("youngest") => vec![AttackType::YoungestFromWorstGroup],
             Some("oldest") => vec![AttackType::OldestFromWorstGroup],
             Some("all") => vec![
@@ -509,6 +510,7 @@ pub enum AttackType {
     Random,
     YoungestFromWorstGroup,
     OldestFromWorstGroup,
+    NewAttack,
     QLearning,
 }
 
@@ -519,6 +521,7 @@ impl AttackType {
             AttackType::YoungestFromWorstGroup => "youngest",
             AttackType::OldestFromWorstGroup => "oldest",
             AttackType::QLearning => "qlearning",
+            AttackType::NewAttack => "new",
         }
     }
 }
@@ -642,6 +645,9 @@ impl SimParams {
                         }
                         AttackType::QLearning => {
                             Box::new(FullSimTool::<QLearningAttack>::new(&args, section_quorum, group_quorum))
+                        }
+                        AttackType::NewAttack => {
+                            Box::new(FullSimTool::<NewAttack>::new(&args, section_quorum, group_quorum))
                         }
                     }
                 }

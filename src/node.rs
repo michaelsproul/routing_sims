@@ -32,6 +32,7 @@ use std::u64;
 use rand::{weak_rng, XorShiftRng, Rng};
 
 use NN;
+use net::Group;
 
 
 /// Name type (Xorable in routing library).
@@ -227,6 +228,13 @@ pub fn new_node_name() -> NodeName {
 /// Generate a random data ID.
 pub fn random_data_id() -> u64 {
     new_node_name()
+}
+
+/// Choose a random node from a group.
+pub fn random_node(group: &Group) -> NodeName {
+    WEAK_RNG.with(|rng| {
+        *::rand::sample(&mut *rng.borrow_mut(), group.keys(), 1)[0]
+    })
 }
 
 /// Data stored for a node

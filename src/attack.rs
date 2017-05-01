@@ -24,6 +24,8 @@ use rand::{weak_rng, XorShiftRng, Rng};
 use std::collections::HashMap;
 use metadata::Data;
 
+use self::MaliciousMetric::*;
+
 pub trait AttackStrategy {
     fn create(_params: &ToolArgs, _spec: &str) -> Self where Self: Sized;
 
@@ -70,6 +72,44 @@ fn all_malicious_nodes(groups: &Groups) -> Vec<(Prefix, NodeName)> {
 }
 
 #[derive(Clone)]
+pub struct NewAttack {
+    /// Min age to kill off a node.
+    age_min: u32,
+    /// Max age to kill off a node.
+    age_max: u32
+}
+
+impl AttackStrategy for NewAttack {
+    fn create(_: &ToolArgs, _: &str) -> Self {
+        NewAttack {
+            age_min: 3,
+            age_max: 4
+        }
+    }
+
+    fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
+        let most_isolated = most_malicious_groups(net.groups(), Absolute);
+
+        let half = most_isolated.len() / 2;
+        for &(prefix, num_malicious) in &most_isolated[..half] {
+            let group = &net.groups()[&prefix];
+            let nodes = youngest_nodes(group);
+
+            for (node, data) in nodes {
+                if data.age() >= self.age_min && data.age() <= self.age_max {
+                    trace!("Kicking a node with age: {}, in a section of size {} with {} malicious",
+                        data.age(), group.len(), num_malicious
+                    );
+                    return Some((prefix, node));
+                }
+            }
+        }
+        trace!("Couldn't find anyone!");
+        None
+    }
+}
+
+#[derive(Clone)]
 pub struct OldestFromWorstGroup;
 
 impl AttackStrategy for OldestFromWorstGroup {
@@ -78,10 +118,14 @@ impl AttackStrategy for OldestFromWorstGroup {
     }
 
     fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
-        let mut most_malicious = most_malicious_groups(net.groups());
+        let metric = AgeFraction; // FIXME
+        let mut most_malicious = most_malicious_groups(net.groups(), metric);
 
-        most_malicious.pop().map(|(prefix, _)| {
-            let (name, _) = youngest_nodes(&net.groups()[&prefix]).pop().unwrap();
+        most_malicious.pop().map(|(prefix, mal_fraction)| {
+            let (name, data) = youngest_nodes(&net.groups()[&prefix]).pop().unwrap();
+            trace!("Kicking a node with age {} from group with mal fraction {}",
+                data.age(), mal_fraction
+            );
             (prefix, name)
         })
     }
@@ -96,34 +140,72 @@ impl AttackStrategy for YoungestFromWorstGroup {
     }
 
     fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
-        let mut most_malicious = most_malicious_groups(net.groups());
+        // FIXME
+        let mut most_malicious = most_malicious_groups(net.groups(), AgeFraction);
 
-        most_malicious.pop().map(|(prefix, _)| {
-            let &(name, _) = youngest_nodes(&net.groups()[&prefix]).first().unwrap();
+        most_malicious.pop().map(|(prefix, mal_fraction)| {
+            let &(name, data) = youngest_nodes(&net.groups()[&prefix]).first().unwrap();
+            trace!("Kicking a node with age {} from group with mal fraction {}",
+                data.age(), mal_fraction
+            );
             (prefix, name)
         })
     }
 }
 
 pub fn youngest_nodes(group: &Group) -> Vec<(NodeName, NodeData)> {
-    let mut result = group.iter().map(|(&n, &d)| (n, d)).collect::<Vec<_>>();
+    let mut result = group.iter()
+        .filter(|&(_, d)| d.is_malicious())
+        .map(|(&n, &d)| (n, d))
+        .collect::<Vec<_>>();
     result.sort_by_key(|&(_, node)| node.age());
     result
 }
 
-pub fn malicious_groups(groups: &Groups) -> Vec<(Prefix, f64)> {
-    groups.iter().filter_map(|(&prefix, group)| {
+/// Metrics for measuring how malicious a section is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MaliciousMetric {
+    /// Absolute number of malicious nodes.
+    Absolute,
+    /// Fraction of nodes that are malicious.
+    NodeFraction,
+    /// Fraction of nodes that are malicious, weighted by their age.
+    AgeFraction
+}
+
+impl MaliciousMetric {
+    fn calculate(&self, group: &Group) -> f64 {
         let malicious_count = group.values().filter(|x| x.is_malicious()).count();
-        if malicious_count > 0 {
-            Some((prefix, malicious_count as f64 / group.len() as f64))
+        match *self {
+            Absolute => malicious_count as f64,
+            NodeFraction => malicious_count as f64 / group.len() as f64,
+            AgeFraction => {
+                let mal_age: u32 = group.values()
+                    .filter(|x| x.is_malicious())
+                    .map(|x| x.age())
+                    .sum();
+                let all_age: u32 = group.values()
+                    .map(|x| x.age())
+                    .sum();
+                mal_age as f64 / all_age as f64
+            }
+        }
+    }
+}
+
+pub fn malicious_groups(groups: &Groups, metric: MaliciousMetric) -> Vec<(Prefix, f64)> {
+    groups.iter().filter_map(|(&prefix, group)| {
+        let mal = metric.calculate(group);
+        if mal > 0.0 {
+            Some((prefix, mal))
         } else {
             None
         }
     }).collect()
 }
 
-pub fn most_malicious_groups(groups: &Groups) -> Vec<(Prefix, f64)> {
-    let mut malicious = malicious_groups(groups);
+pub fn most_malicious_groups(groups: &Groups, metric: MaliciousMetric) -> Vec<(Prefix, f64)> {
+    let mut malicious = malicious_groups(groups, metric);
     malicious.sort_by(|&(_, m1), &(_, ref m2)| m1.partial_cmp(m2).unwrap().reverse());
     if malicious.len() >= 2 {
         assert!(malicious[0].1 >= malicious[1].1, "got the order reversed");
@@ -145,7 +227,6 @@ pub struct QLearningAttack {
 }
 
 #[derive(Clone)]
-// TODO: optimise over these parameters.
 pub struct QLearningParams {
     pub learning_rate: f64,
     pub discount_factor: f64,
@@ -249,7 +330,8 @@ impl AttackStrategy for QLearningAttack {
         // Update q.
         if let Some(action) = previous_action {
             // TODO: determine whether differential or cumulative rewards work better...
-            let new_frac: f64 = malicious_fractions(net.groups(), self.params.group_focus)
+            let metric = NodeFraction; // FIXME
+            let new_frac: f64 = malicious_fractions(net.groups(), self.params.group_focus, metric)
                 .into_iter()
                 .sum();
             let r = new_frac; // - self.prev_fraction;
@@ -271,8 +353,8 @@ impl AttackStrategy for QLearningAttack {
     }
 }
 
-pub fn malicious_fractions(groups: &Groups, n: u64) -> Vec<f64> {
-    most_malicious_groups(groups).into_iter()
+pub fn malicious_fractions(groups: &Groups, n: u64, metric: MaliciousMetric) -> Vec<f64> {
+    most_malicious_groups(groups, metric).into_iter()
         .map(|(_, frac)| frac)
         .take(n as usize)
         .collect()

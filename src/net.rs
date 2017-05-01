@@ -29,7 +29,7 @@ use std::mem;
 
 use {NN, ToolArgs};
 use attack::AttackStrategy;
-use node::{Prefix, NodeName, NodeData, new_node_name, random_data_id};
+use node::{Prefix, NodeName, NodeData, new_node_name, random_data_id, random_node};
 use quorum::Quorum;
 
 /// Maximum number of iterations to run when adding pending nodes.
