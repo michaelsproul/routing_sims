@@ -29,18 +29,50 @@ use node::NodeData;
 use metadata::Metadata;
 use std::marker::PhantomData;
 
-/// First value is probability of disruption, second is probability of compromise.
+/// Result of a simulation, carrying probabilities of different types of compromise.
 #[derive(Clone, Copy)]
-pub struct SimResult(RR, RR, RR);
+pub struct SimResult {
+    /// Honest nodes can't form quorum in a section.
+    p_disrupt: f64,
+    /// Attacker can form quorum in a section.
+    p_compromise: f64,
+    /// Attacker can double-vote with non-zero probability.
+    p_double_vote: f64,
+    /// Attacker can form quorum in a data group with non-zero probability.
+    p_data_compromise: f64,
+}
+
 impl SimResult {
+    pub fn legacy(p_disrupt: f64, p_compromise: f64) -> Self {
+        Self::new(p_disrupt, p_compromise, 0.0, 0.0)
+    }
+
+    pub fn new(p_disrupt: f64,
+               p_compromise: f64,
+               p_double_vote: f64,
+               p_data_compromise: f64) -> Self {
+        SimResult {
+            p_disrupt,
+            p_compromise,
+            p_double_vote,
+            p_data_compromise
+        }
+    }
+
     pub fn p_disrupt(&self) -> RR {
-        self.0
+        self.p_disrupt
     }
+
     pub fn p_compromise(&self) -> RR {
-        self.1
+        self.p_compromise
     }
+
+    pub fn p_double_vote(&self) -> f64 {
+        self.p_double_vote
+    }
+
     pub fn p_data_compromise(&self) -> RR {
-        self.2
+        self.p_data_compromise
     }
 }
 
@@ -102,9 +134,8 @@ impl<'a> Tool for DirectCalcTool<'a> {
                pc);
 
         let n_groups = (n as RR) / (self.args.min_section_size as RR);
-        SimResult(1.0 - (1.0 - pd).powf(n_groups),
-                  1.0 - (1.0 - pc).powf(n_groups),
-                  0.0)
+        SimResult::legacy(1.0 - (1.0 - pd).powf(n_groups),
+                          1.0 - (1.0 - pc).powf(n_groups))
     }
 }
 
@@ -174,7 +205,7 @@ impl<'a> Tool for SimStructureTool<'a> {
             p_no_disruption *= 1.0 - pd;
             p_no_compromise *= 1.0 - pc;
         }
-        SimResult(1.0 - p_no_disruption, 1.0 - p_no_compromise, 0.0)
+        SimResult::legacy(1.0 - p_no_disruption, 1.0 - p_no_compromise)
     }
 }
 
@@ -213,21 +244,21 @@ impl<'a, A: AttackStrategy> FullSimTool<'a, A> {
 
         // 1. Create an initial network of good nodes.
         let mut net = Network::new(self.args.min_section_size as usize);
-        metadata.update(&net, 0.0);
+        metadata.update(&net, 0.0, 0.0);
 
         for i in 0..self.args.num_initial {
             trace!("adding node: {}", i);
             net.add_node::<RestrictOnePerAge>(NodeData::new(false));
-            metadata.update(&net, 0.0);
+            metadata.update(&net, 0.0, 0.0);
             net.add_all_pending_nodes::<RestrictOnePerAge>();
-            metadata.update(&net, 0.0);
+            metadata.update(&net, 0.0, 0.0);
         }
 
         // 2. Join the malicious nodes.
         for _ in 0..self.args.num_attacking {
             net.add_node::<RestrictOnePerAge>(NodeData::new(true));
             net.add_all_pending_nodes::<RestrictOnePerAge>();
-            metadata.update(&net, 0.0);
+            metadata.update(&net, 0.0, 0.0);
         }
 
         // 2. Start attack
@@ -238,6 +269,7 @@ impl<'a, A: AttackStrategy> FullSimTool<'a, A> {
 
         let mut disruption = false;
         let mut data_corrupted = false;
+        let mut double_vote = false;
 
         let allow_join_leave = true;
 
@@ -258,22 +290,29 @@ impl<'a, A: AttackStrategy> FullSimTool<'a, A> {
 
             data_corrupted |= corrupt_fraction.is_some();
 
-            metadata.update(&net, corrupt_fraction.unwrap_or(0.0));
+            let double_vote_prob = net.max_double_vote_prob(&self.section_quorum);
+            double_vote |= double_vote_prob > 0.0;
+
+            metadata.update(&net, double_vote_prob, corrupt_fraction.unwrap_or(0.0));
 
             // Check if disruption or compromise occurred:
-            // FIXME(michael): rename groups => sections.
+            // TODO(michael): rename groups => sections everywhere
             for (_, ref group) in net.groups() {
                 if self.section_quorum.quorum_compromised(group) {
                     // Compromise implies disruption!
-                    return SimResult(1.0, 1.0, if data_corrupted { 1.0 } else { 0.0 });
+                    return SimResult::new(1.0, 1.0, bool_prob(double_vote), bool_prob(data_corrupted));
                 } else if self.section_quorum.quorum_disrupted(group) {
                     disruption = true;
                 }
             }
         }
 
-        SimResult(if disruption { 1.0 } else { 0.0 }, 0.0, if data_corrupted { 1.0 } else { 0.0 })
+        SimResult::new(bool_prob(disruption), 0.0, bool_prob(double_vote), bool_prob(data_corrupted))
     }
+}
+
+fn bool_prob(value: bool) -> f64 {
+    if value { 1.0 } else { 0.0 }
 }
 
 impl<'a, A: AttackStrategy> Tool for FullSimTool<'a, A>
@@ -293,13 +332,26 @@ impl<'a, A: AttackStrategy> Tool for FullSimTool<'a, A>
         let result = (0..repetitions)
             .into_par_iter()
             .map(|i| self.run_sim(i))
-            .reduce(|| SimResult(0.0, 0.0, 0.0),
-                    |v1, v2| SimResult(v1.0 + v2.0, v1.1 + v2.1, v1.2 + v2.2));
+            .reduce(|| SimResult::new(0.0, 0.0, 0.0, 0.0),
+                    |v1, v2| {
+                        SimResult::new(
+                            v1.p_disrupt + v2.p_disrupt,
+                            v1.p_compromise + v2.p_compromise,
+                            v1.p_double_vote + v2.p_double_vote,
+                            v1.p_data_compromise + v2.p_data_compromise
+                        )
+                    });
 
         let denom = repetitions as RR;
-        let res = SimResult(result.0 / denom, result.1 / denom, result.2 / denom);
-        println!("{} {:.05} {:.05} {:.05}",
-            self.args.spec_str(0), res.p_disrupt(), res.p_compromise(), res.p_data_compromise()
+        let res = SimResult::new(
+            result.p_disrupt / denom,
+            result.p_compromise / denom,
+            result.p_double_vote / denom,
+            result.p_data_compromise / denom
+        );
+        println!("{} {:.05} {:.05} {:.05} {:.05}",
+            self.args.spec_str(0), res.p_disrupt(), res.p_compromise(),
+            res.p_double_vote(), res.p_data_compromise()
         );
         res
     }

@@ -218,6 +218,13 @@ thread_local! {
     static WEAK_RNG: RefCell<XorShiftRng> = RefCell::new(weak_rng());
 }
 
+/// Random f64 in [0, 1)
+pub fn random_prob() -> f64 {
+    WEAK_RNG.with(|rng| {
+        rng.borrow_mut().gen()
+    })
+}
+
 /// Generate a new node name
 pub fn new_node_name() -> NodeName {
     WEAK_RNG.with(|rng| {
@@ -231,6 +238,7 @@ pub fn random_data_id() -> u64 {
 }
 
 /// Choose a random node from a group.
+#[allow(unused)]
 pub fn random_node(group: &Group) -> NodeName {
     WEAK_RNG.with(|rng| {
         *::rand::sample(&mut *rng.borrow_mut(), group.keys(), 1)[0]

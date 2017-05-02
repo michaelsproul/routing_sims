@@ -4,9 +4,10 @@ name = "routing-sims"
 version = "0.1.0"
 
 [dependencies]
-clap = "2.18.0"
+clap = "^2.18.0"
 env_logger = "0.3.5"
 log = "0.3.6"
 rand = "0.3.14"
 rayon = "0.6"
 rustc-serialize = "0.3.23"
+statrs = "^0.6.0"

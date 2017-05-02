@@ -18,7 +18,10 @@
 //! Quorum
 
 use {NN, RR};
-use net::Group;
+use node::{NodeName, random_prob};
+use net::{Group, calc_num_malicious};
+use statrs::distribution::{Binomial, Univariate};
+use std::collections::HashSet;
 
 
 /// Describes the "quorum" algorithm
@@ -39,10 +42,14 @@ pub trait Quorum {
 
     /// Returns true if there is a quorum of bad nodes in the passed group.
     fn quorum_compromised(&self, group: &Group) -> bool;
+
+    /// Returns the probability (if non-zero) that malicious nodes could commit two diff votes.
+    fn prob_vote_conflict(&self, group: &Group) -> f64;
 }
 
 /// Quorum based on simply meeting some minimum proportion of the group.
 pub struct SimpleQuorum {
+    // TODO: stop using floats and use a rational number instead (or ints).
     proportion: RR,
 }
 
@@ -78,6 +85,45 @@ impl Quorum for SimpleQuorum {
         let all = group.len() as RR;
         bad / all >= self.proportion
     }
+
+    fn prob_vote_conflict(&self, group: &Group) -> f64 {
+        if self.quorum_compromised(group) {
+            return 1.0;
+        }
+
+        if group.len() == 0 {
+            return 0.0;
+        }
+
+        let num_malicious = calc_num_malicious(group);
+        let num_honest = group.len() - num_malicious;
+
+        // Effective quorum is number of honest nodes needed to vote for a change.
+        let quorum = (self.proportion * group.len() as RR).ceil() as usize;
+        let effective_quorum = quorum - num_malicious;
+
+        // If the number of honest nodes can't be split into 2 effective quorums, probability is 0.
+        if num_honest < 2 * effective_quorum {
+            return 0.0;
+        }
+
+        trace!("num_malicious = {}, num_honest = {}, quorum = {}, effective_quorum = {}",
+            num_malicious, num_honest, quorum, effective_quorum
+        );
+
+        // Compute probability that we get a partitioning into two partitions of size greater than
+        // effective_quorum (assuming 50% probability of falling on either side).
+        let binom = Binomial::new(0.5, num_honest as u64).unwrap();
+        let p_no_quorum = binom.cdf((effective_quorum - 1) as f64);
+
+        // Take advantage of binomial distribution symmetry to get "the bit in the middle".
+        let p_double_vote = 1.0 - 2.0 * p_no_quorum;
+        trace!("p_double_vote: {}", p_double_vote);
+        assert!(p_double_vote >= 0.0);
+        assert!(p_double_vote <= 1.0);
+
+        p_double_vote
+    }
 }
 
 /// Quorum which requires some proportion of group age as well as number
@@ -104,6 +150,7 @@ impl Quorum for AgeQuorum {
         self.proportion = prop;
     }
 
+    // TODO(michael): dedup with below.
     fn quorum_disrupted(&self, group: &Group) -> bool {
         let n_nodes = group.len() as RR;
         let mut sum_age = 0;
@@ -135,4 +182,61 @@ impl Quorum for AgeQuorum {
         (n_bad as RR) / n_nodes >= self.proportion &&
         (bad_age as RR) / (sum_age as RR) >= self.proportion
     }
+
+    fn prob_vote_conflict(&self, group: &Group) -> f64 {
+        if group.is_empty() {
+            return 0.0;
+        }
+
+        // Sample random partitions of the honest nodes.
+        let num_samples = 10;
+
+        let mut num_conflicts = 0;
+
+        let (num_malicious, age_malicious) = malicious_stats(group);
+
+        for _ in 0..num_samples {
+            let (h1, h2) = partition_honest(group);
+
+            if is_age_quorum(group, &h1, num_malicious, age_malicious, self.proportion) &&
+               is_age_quorum(group, &h2, num_malicious, age_malicious, self.proportion) {
+                   num_conflicts += 1;
+            }
+        }
+
+        num_conflicts as f64 / num_samples as f64
+    }
+}
+
+fn partition_honest(group: &Group) -> (HashSet<NodeName>, HashSet<NodeName>) {
+    group.into_iter()
+        .filter(|&(_, node)| !node.is_malicious())
+        .map(|(name, _)| name)
+        .partition(|_| random_prob() <= 0.5)
+}
+
+fn malicious_stats(group: &Group) -> (usize, u32) {
+    group.values()
+        .filter(|node| node.is_malicious())
+        .fold((0, 0), |(acc_count, acc_age), node| (acc_count + 1, acc_age + node.age()))
+}
+
+fn is_age_quorum(group: &Group,
+                 honest: &HashSet<NodeName>,
+                 num_malicious: usize,
+                 age_malicious: u32,
+                 proportion: RR) -> bool {
+
+    let age_honest: u32 = honest.into_iter()
+        .map(|name| group[name].age())
+        .sum();
+
+    let age_total: u32 = group.values().map(|node| node.age()).sum();
+
+    // Number of total votes.
+    let num_votes = honest.len() + num_malicious;
+    let age_votes = age_honest + age_malicious;
+
+    (num_votes as RR) >= proportion * (group.len() as RR) &&
+    (age_votes as RR) >= proportion * (age_total as RR)
 }

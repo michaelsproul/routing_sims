@@ -69,8 +69,16 @@ function renderMaliciousFraction() {
         xaxis: { title: "step number" },
         yaxis: { title: "fraction of malicious nodes in section" }
     };
-    $.getJSON("most_malicious.json").done((data) => {
-        Plotly.plot("mostMalicious", [data], options);
+    var requests = [
+        $.getJSON("most_malicious_count.json"),
+        $.getJSON("most_malicious_age.json")
+    ];
+    $.when.apply($, requests).done(function() {
+        var data = [];
+        for (let i = 0; i < arguments.length; i++) {
+            data.push(arguments[i][0]);
+        }
+        Plotly.plot("mostMalicious", data, options);
     });
 }
 
@@ -127,6 +135,17 @@ function renderCorruptData() {
     });
 }
 
+function renderDoubleVote() {
+    let options = {
+        title: "Probability of Double Vote",
+        xaxis: { title: "step number" },
+        yaxis: { title: "max prob double vote" }
+    };
+    $.getJSON("double_vote.json").done((data) => {
+        Plotly.plot("double_vote", [data], options);
+    });
+}
+
 $(document).ready(() => {
     renderBasicInfo();
     renderSectionSizes();
@@ -135,4 +154,5 @@ $(document).ready(() => {
     renderMaliciousAges();
     renderQLearningStats();
     renderCorruptData();
+    renderDoubleVote();
 });

@@ -25,6 +25,7 @@ extern crate clap;
 extern crate log;
 extern crate env_logger;
 extern crate rayon;
+extern crate statrs;
 
 mod prob;
 mod node;

@@ -631,7 +631,7 @@ impl SimParams {
                     } else {
                         Box::new(SimpleQuorum::new())
                     };
-                    // FIXME(michael): age based quorums for groups
+                    // TODO(michael): age based quorums for groups
                     let group_quorum = Box::new(SimpleQuorum::new());
                     match self.targetting {
                         AttackType::Random => {

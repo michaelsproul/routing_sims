@@ -23,10 +23,13 @@ pub struct Metadata {
     num_sections: Data<usize>,
     num_nodes: Data<usize>,
     num_malicious: Data<usize>,
-    most_malicious: Data<f64>,
+    most_malicious_count: Data<f64>,
+    most_malicious_age: Data<f64>,
     node_ages: Data<u32>,
     section_info: SectionInfo,
     corrupt_data: Data<f64>,
+    double_vote: Data<f64>,
+    enabled: bool,
 }
 
 impl Metadata {
@@ -36,14 +39,20 @@ impl Metadata {
             num_sections: Data::new(dir, "num_sections", "y", write_out),
             num_nodes: Data::new(dir, "num_nodes", "y2", write_out),
             num_malicious: Data::new(dir, "num_malicious", "y2", write_out),
-            most_malicious: Data::new(dir, "most_malicious", "y", write_out),
+            most_malicious_count: Data::new(dir, "most_malicious_count", "y", write_out),
+            most_malicious_age: Data::new(dir, "most_malicious_age", "y", write_out),
             node_ages: Data::new(dir, "malicious_node_ages", "", write_out),
             section_info: SectionInfo::new(dir, write_out),
             corrupt_data: Data::new(dir, "corrupt_data", "", write_out),
+            double_vote: Data::new(dir, "double_vote", "", write_out),
+            enabled: write_out,
         }
     }
 
-    pub fn update(&mut self, net: &Network, corrupt_fraction: f64) {
+    pub fn update(&mut self, net: &Network, double_vote_prob: f64, corrupt_fraction: f64) {
+        if !self.enabled {
+            return;
+        }
         let groups = net.groups();
         self.num_sections.add_point(self.step_num, groups.len());
         self.num_nodes.add_point(self.step_num, count_nodes(groups));
@@ -52,13 +61,18 @@ impl Metadata {
         self.update_malicious_node_ages(groups);
         self.section_info.update(self.step_num, groups);
         self.corrupt_data.add_point(self.step_num, corrupt_fraction);
+        self.double_vote.add_point(self.step_num, double_vote_prob);
         self.step_num += 1;
     }
 
     fn update_most_malicious(&mut self, groups: &Groups) {
-        let malicious = most_malicious_groups(groups, MaliciousMetric::AgeFraction);
-        let frac = malicious.first().map(|&(_, frac)| frac).unwrap_or(0.0);
-        self.most_malicious.add_point(self.step_num, frac);
+        let malicious = most_malicious_groups(groups, MaliciousMetric::NodeFraction);
+        let (age_frac, node_frac) = malicious.first().map(|&(prefix, node_frac)| {
+            let age_frac = MaliciousMetric::AgeFraction.calculate(&groups[&prefix]);
+            (age_frac, node_frac)
+        }).unwrap_or((0.0, 0.0));
+        self.most_malicious_count.add_point(self.step_num, node_frac);
+        self.most_malicious_age.add_point(self.step_num, age_frac);
     }
 
     fn update_malicious_node_ages(&mut self, groups: &Groups) {

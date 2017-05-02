@@ -29,7 +29,7 @@ use std::mem;
 
 use {NN, ToolArgs};
 use attack::AttackStrategy;
-use node::{Prefix, NodeName, NodeData, new_node_name, random_data_id, random_node};
+use node::{Prefix, NodeName, NodeData, new_node_name, random_data_id};
 use quorum::Quorum;
 
 /// Maximum number of iterations to run when adding pending nodes.
@@ -396,6 +396,14 @@ impl Network {
         }
     }
 
+    pub fn max_double_vote_prob(&self, quorum: &Box<Quorum + Sync>) -> f64 {
+        self.groups()
+            .values()
+            .map(|group| quorum.prob_vote_conflict(group))
+            .max_by(|p1, p2| p1.partial_cmp(&p2).unwrap())
+            .unwrap_or(0.0)
+    }
+
     fn min_new_section_size(&self) -> usize {
         // mirrors RoutingTable
         self.min_section_size + 1
@@ -410,4 +418,8 @@ fn closest<'a, S>(n: u64, val: NN, section: S) -> Vec<NN>
     nodes.sort_by_key(|point| point ^ val);
     nodes.truncate(n as usize);
     nodes
+}
+
+pub fn calc_num_malicious(group: &Group) -> usize {
+    group.values().filter(|n| n.is_malicious()).count()
 }

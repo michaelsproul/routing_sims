@@ -118,8 +118,8 @@ impl AttackStrategy for OldestFromWorstGroup {
     }
 
     fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
-        let metric = AgeFraction; // FIXME
-        let mut most_malicious = most_malicious_groups(net.groups(), metric);
+        // TODO: make this metric tweakable.
+        let mut most_malicious = most_malicious_groups(net.groups(), AgeFraction);
 
         most_malicious.pop().map(|(prefix, mal_fraction)| {
             let (name, data) = youngest_nodes(&net.groups()[&prefix]).pop().unwrap();
@@ -140,7 +140,7 @@ impl AttackStrategy for YoungestFromWorstGroup {
     }
 
     fn force_to_rejoin(&mut self, net: &Network, _ddos: bool) -> Option<(Prefix, NodeName)> {
-        // FIXME
+        // TODO: make this metric tweakable.
         let mut most_malicious = most_malicious_groups(net.groups(), AgeFraction);
 
         most_malicious.pop().map(|(prefix, mal_fraction)| {
@@ -174,7 +174,7 @@ pub enum MaliciousMetric {
 }
 
 impl MaliciousMetric {
-    fn calculate(&self, group: &Group) -> f64 {
+    pub fn calculate(&self, group: &Group) -> f64 {
         let malicious_count = group.values().filter(|x| x.is_malicious()).count();
         match *self {
             Absolute => malicious_count as f64,
@@ -330,7 +330,8 @@ impl AttackStrategy for QLearningAttack {
         // Update q.
         if let Some(action) = previous_action {
             // TODO: determine whether differential or cumulative rewards work better...
-            let metric = NodeFraction; // FIXME
+            // TODO: consider using a metric that takes into account number AND age of mal nodes.
+            let metric = NodeFraction;
             let new_frac: f64 = malicious_fractions(net.groups(), self.params.group_focus, metric)
                 .into_iter()
                 .sum();
@@ -347,7 +348,7 @@ impl AttackStrategy for QLearningAttack {
             self.q.insert(action, updated_val);
         }
 
-        // FIXME: result doesn't take into account most recently learnt value,
+        // TODO: result doesn't take into account most recently learnt value,
         // does that matter?
         result
     }
